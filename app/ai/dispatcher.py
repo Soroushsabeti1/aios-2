@@ -306,13 +306,23 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
         # ─── لینک‌های دعوت جدید ───
         if tool_name == "create_employee_invite_link":
             from app.core.runtime import get_bot_username
-            return await persons_service.create_employee_invite_link(
+            result = await persons_service.create_employee_invite_link(
                 session, tenant_id,
                 bot_username=get_bot_username(),
                 person_name=args.get("person_name", ""),
                 link_type=args.get("link_type", "self"),
                 expires_hours=args.get("expires_hours", 24 * 7),
             )
+            # اگه دو پیام جدا داشت، دومی رو به صف پیام اضافه کن
+            if "||SPLIT_MSG||" in result:
+                parts = result.split("||SPLIT_MSG||", 1)
+                # پیام دوم (فوروارد) رو به کارفرما بفرست
+                outbox.queue_message(user_id, {
+                    "chat_id": user_id,
+                    "text": "👇 این پیام رو برای کارمند فوروارد کن:\n\n" + parts[1],
+                })
+                return parts[0]
+            return result
         if tool_name == "create_customer_invite_link":
             from app.core.runtime import get_bot_username
             return await persons_service.create_customer_invite_link(
@@ -675,8 +685,11 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             return "⚠️ خطا در تولید صدا. متنی جواب می‌دم:\n\n" + text
 
         if tool_name == "set_voice":
-            from app.modules.tts_service import set_voice as _set_voice
-            return await _set_voice(session, tenant_id, **args)
+            from app.modules.tts_service import set_voice as _set_voice, list_voices
+            vk = args.get("voice_key", "list")
+            if vk == "list":
+                return await list_voices()
+            return await _set_voice(session, tenant_id, vk)
 
         # ─── خروجی دسته‌جمعی ───
         if tool_name == "batch_export":
@@ -863,9 +876,28 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
         if tool_name == "add_task":
             from app.modules import project_service
             return await project_service.add_task(session, tenant_id, **args)
+        if tool_name == "request_disconnect":
+            person = await persons_service.get_person_by_telegram(session, user_id)
+            if not person:
+                return "⚠️ پروفایلت پیدا نشد."
+            reason = args.get("reason", "")
+            from app.database.models.tenant import Tenant
+            tenant = await session.get(Tenant, tenant_id)
+            if tenant:
+                msg = f"📩 {person.full_name} می‌خواد از سیستم قطع بشه."
+                if reason:
+                    msg += f"\nدلیل: {reason}"
+                msg += f"\n\nبرای تأیید بگو: «قطع اتصال {person.full_name} رو تأیید کن»"
+                outbox.queue_message(user_id, {"chat_id": tenant.owner_telegram_id, "text": msg})
+            return "✅ درخواستت به کارفرما فرستاده شد. منتظر تأییدشون باش."
+
         if tool_name == "move_task":
             from app.modules import project_service
-            return await project_service.move_task(session, tenant_id, **args)
+            result = await project_service.move_task(session, tenant_id, **args)
+            if args.get("new_list") == "approved":
+                await _trigger_flows(session, tenant_id, "task_completed",
+                                      {"task_id": args.get("task_id", "")}, user_id)
+            return result
         if tool_name == "list_tasks":
             from app.modules import project_service
             return await project_service.list_tasks(session, tenant_id, **args)

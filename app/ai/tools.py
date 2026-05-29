@@ -1179,11 +1179,11 @@ TOOLS += [
 TOOLS += [
     {"type": "function", "function": {
         "name": "set_voice",
-        "description": "تغییر جنس صدای ربات. مثال: صدا رو مردانه کن، صدا رو زنانه کن",
+        "description": "تغییر صدای ربات یا نمایش صداهای موجود. مثال: «صداهای موجود رو نشون بده» یا «صدا رو به nova تغییر بده»",
         "parameters": {"type": "object", "properties": {
             "voice_key": {"type": "string",
-                         "enum": ["fa-female", "fa-male", "en-female", "en-male"],
-                         "description": "fa-female=زن فارسی، fa-male=مرد فارسی"},
+                         "enum": ["alloy", "echo", "fable", "onyx", "nova", "shimmer", "list"],
+                         "description": "نام صدا یا list برای نمایش همه صداها"},
         }, "required": ["voice_key"]},
     }},
 ]
@@ -1221,5 +1221,15 @@ TOOLS += [
         "parameters": {"type": "object", "properties": {
             "confirmed": {"type": "boolean", "description": "کارفرما تأیید کرده؟"},
         }, "required": ["confirmed"]},
+    }},
+]
+
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "request_disconnect",
+        "description": "کارمند می‌خواد از سیستم قطع بشه — نیاز به تأیید کارفرما داره",
+        "parameters": {"type": "object", "properties": {
+            "reason": {"type": "string", "description": "دلیل قطع اتصال (اختیاری)"},
+        }},
     }},
 ]

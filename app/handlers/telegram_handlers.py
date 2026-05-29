@@ -513,34 +513,75 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cred_step:
         async with AsyncSessionLocal() as session:
 
-            # ─── مرحله ورود با لینک: یوزرنیم ───
+            # ─── normalize اعداد فارسی ───
+            def normalize_digits(s: str) -> str:
+                fa_digits = "۰۱۲۳۴۵۶۷۸۹"
+                for i, d in enumerate(fa_digits):
+                    s = s.replace(d, str(i))
+                return s
+
+            text_normalized = normalize_digits(text.strip()) if text else ""
+
+            # ─── مرحله ۱: نام کاربری ───
             if cred_step == "username":
-                context.user_data["pending_username"] = text
+                # چک اینکه کد ملی ۱۰ رقم باشه
+                if not text_normalized.isdigit() or len(text_normalized) != 10:
+                    await update.message.reply_text(
+                        "⚠️ نام کاربری باید کد ملی ۱۰ رقمی باشه.\n"
+                        "دوباره وارد کن:"
+                    )
+                    return
+                context.user_data["pending_username"] = text_normalized
                 context.user_data["credential_step"] = "password"
-                await update.message.reply_text("🔑 گذرواژه‌ات رو بفرست (شماره تماس اولیه):")
+                await update.message.reply_text(
+                    "✅ نام کاربری تأیید شد.\n"
+                    "حالا گذرواژه‌ات رو وارد کن (شماره تماس ثبت‌شده):"
+                )
                 return
 
-            # ─── مرحله ورود با لینک: پسورد ───
+            # ─── مرحله ۲: گذرواژه ───
             elif cred_step == "password":
                 token = context.user_data.get("pending_invite_token", "")
-                username = context.user_data.get("pending_username", "")
+                fail_count = context.user_data.get("credential_fails", 0)
+
+                if fail_count >= 6:
+                    context.user_data.pop("credential_step", None)
+                    context.user_data.pop("pending_invite_token", None)
+                    context.user_data.pop("credential_fails", None)
+                    await update.message.reply_text(
+                        "🔒 لینک قفل شد — ۶ بار اشتباه وارد کردی.\n"
+                        "از کارفرما بخواه لینک جدید بفرسته."
+                    )
+                    return
+
                 ok, msg = await persons_service.consume_invite_link(
                     session, token, user.id,
                     telegram_username=user.username,
                     full_name=user.full_name,
-                    password_attempt=text,
+                    password_attempt=normalize_digits(text.strip()),
                 )
-                context.user_data.pop("pending_invite_token", None)
-                context.user_data.pop("pending_username", None)
 
-                if msg in ("PASSWORD_REQUIRED", "WRONG_PASSWORD"):
-                    context.user_data["credential_step"] = "username"
-                    context.user_data["pending_invite_token"] = token
-                    if msg == "WRONG_PASSWORD":
-                        await update.message.reply_text("⚠️ گذرواژه اشتباهه. نام کاربری‌ات رو دوباره بفرست:")
-                    else:
-                        await update.message.reply_text("⚠️ نام کاربری یا گذرواژه اشتباهه. نام کاربری‌ات رو دوباره بفرست (کد ملی):")
+                if msg == "WRONG_PASSWORD":
+                    fail_count += 1
+                    context.user_data["credential_fails"] = fail_count
+                    remaining = 6 - fail_count
+                    await update.message.reply_text(
+                        f"⚠️ گذرواژه اشتباهه. ({fail_count} از ۶ تلاش)\n"
+                        f"شماره تماس ثبت‌شده رو وارد کن ({remaining} تلاش باقیمونده):"
+                    )
                     return
+
+                if msg == "PASSWORD_REQUIRED":
+                    context.user_data["credential_step"] = "username"
+                    await update.message.reply_text(
+                        "⚠️ نام کاربری تأیید نشد.\n"
+                        "کد ملی‌ات رو دوباره وارد کن:"
+                    )
+                    return
+
+                # موفق
+                context.user_data.pop("pending_invite_token", None)
+                context.user_data.pop("credential_fails", None)
 
                 if ok and msg.endswith("|CHANGE_CREDENTIALS"):
                     real_msg = msg[:-len("|CHANGE_CREDENTIALS")]
@@ -551,28 +592,48 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(msg)
                 return
 
-            # ─── تغییر credential: یوزرنیم جدید ───
+            # ─── مرحله ۳: نام کاربری جدید ───
             elif cred_step == "new_username":
+                import re
+                if not re.match(r'^[a-zA-Z0-9_]{5,30}$', text.strip()):
+                    await update.message.reply_text(
+                        "⚠️ نام کاربری باید:\n"
+                        "• حداقل ۵ کاراکتر\n"
+                        "• فقط حروف لاتین، عدد یا _\n\n"
+                        "دوباره وارد کن:"
+                    )
+                    return
                 result = await persons_service.change_credentials(
-                    session, user.id, new_username=text
+                    session, user.id, new_username=text.strip()
                 )
                 if result.startswith("✅"):
                     context.user_data["credential_step"] = "new_password"
                     await update.message.reply_text(
-                        f"{result}\nحالا گذرواژه جدیدت رو بفرست (حداقل ۸ کاراکتر، از حروف و عدد استفاده کن):"
+                        f"{result}\n\n"
+                        "حالا گذرواژه جدیدت رو بفرست:\n"
+                        "• حداقل ۸ کاراکتر\n"
+                        "• ترکیبی از حروف و عدد:"
                     )
                 else:
                     await update.message.reply_text(result)
                 return
 
-            # ─── تغییر credential: پسورد جدید ───
+            # ─── مرحله ۴: گذرواژه جدید ───
             elif cred_step == "new_password":
+                if len(text.strip()) < 8:
+                    await update.message.reply_text(
+                        "⚠️ گذرواژه باید حداقل ۸ کاراکتر باشه.\n"
+                        "دوباره وارد کن:"
+                    )
+                    return
                 result = await persons_service.change_credentials(
-                    session, user.id, new_password=text
+                    session, user.id, new_password=text.strip()
                 )
                 context.user_data.pop("credential_step", None)
                 await update.message.reply_text(
-                    f"{result}\n\nمحتوای چتت کاملاً خصوصیه — حتی کارفرما نمی‌تونه ببینه."
+                    "✅ نام کاربری و گذرواژه‌ات ثبت شد!\n\n"
+                    "🔒 محتوای چتت کاملاً خصوصیه — حتی کارفرما نمی‌تونه ببینه.\n\n"
+                    "هر وقت کاری داشتی بگو 😊"
                 )
                 return
 
@@ -888,9 +949,161 @@ async def _dispatch_admin_notifications(context):
 async def admin_command_handler(update, context: ContextTypes.DEFAULT_TYPE):
     """
     هندلر دستورات ادمین:
-      /approve_<request_id>_<days>  [پیام اختیاری]
-      /reject_<request_id>  [دلیل اختیاری]
+      /approve_<id>_<days>   تأیید اشتراک
+      /reject_<id>           رد اشتراک
+      /tenants               لیست کارفرماها
+      /suspend_<tenant_id>   تعلیق کارفرما
+      /unsuspend_<tenant_id> رفع تعلیق
+      /delete_tenant_<id>    حذف کارفرما
     """
+    from app.core.config import settings
+    from app.database.base import AsyncSessionLocal
+    from app.modules.subscription_service import approve_request, reject_request
+    from app.database.models.tenant import Tenant
+    from sqlalchemy import select as _sel
+
+    user = update.effective_user
+    if user.id not in settings.admin_id_list:
+        return
+
+    text = update.message.text or ""
+    parts = text.strip().split(maxsplit=1)
+    cmd = parts[0].lstrip("/")
+    extra = parts[1] if len(parts) > 1 else ""
+
+    # ─── لیست کارفرماها ───
+    if cmd == "tenants":
+        async with AsyncSessionLocal() as session:
+            tenants = (await session.scalars(
+                _sel(Tenant).order_by(Tenant.id.desc()).limit(50)
+            )).all()
+            if not tenants:
+                await update.message.reply_text("هیچ کارفرمایی نیست.")
+                return
+            lines = [f"📋 کارفرماها ({len(tenants)}):\n"]
+            for t in tenants:
+                status = "✅" if t.is_active else "🔴"
+                sub = t.subscription_status or "—"
+                lines.append(f"{status} [{t.id}] {t.name} — {sub} — {t.owner_telegram_id}")
+            lines.append("\nدستورات:")
+            lines.append("/suspend_<id> | /unsuspend_<id> | /delete_tenant_<id>")
+            await update.message.reply_text("\n".join(lines))
+        return
+
+    # ─── تعلیق کارفرما ───
+    if cmd.startswith("suspend_"):
+        try:
+            tid = int(cmd.split("_")[1])
+        except Exception:
+            await update.message.reply_text("فرمت: /suspend_<tenant_id>")
+            return
+        async with AsyncSessionLocal() as session:
+            tenant = await session.get(Tenant, tid)
+            if not tenant:
+                await update.message.reply_text("کارفرما پیدا نشد.")
+                return
+            tenant.is_active = False
+            tenant.subscription_status = "suspended"
+            await session.commit()
+            await update.message.reply_text(f"✅ کارفرما «{tenant.name}» تعلیق شد.")
+            try:
+                await context.bot.send_message(
+                    chat_id=tenant.owner_telegram_id,
+                    text="⚠️ دسترسی شما به سیستم موقتاً تعلیق شده. برای اطلاعات بیشتر با پشتیبانی تماس بگیرید."
+                )
+            except Exception:
+                pass
+        return
+
+    # ─── رفع تعلیق ───
+    if cmd.startswith("unsuspend_"):
+        try:
+            tid = int(cmd.split("_")[1])
+        except Exception:
+            await update.message.reply_text("فرمت: /unsuspend_<tenant_id>")
+            return
+        async with AsyncSessionLocal() as session:
+            tenant = await session.get(Tenant, tid)
+            if not tenant:
+                await update.message.reply_text("کارفرما پیدا نشد.")
+                return
+            tenant.is_active = True
+            tenant.subscription_status = "active"
+            await session.commit()
+            await update.message.reply_text(f"✅ کارفرما «{tenant.name}» فعال شد.")
+            try:
+                await context.bot.send_message(
+                    chat_id=tenant.owner_telegram_id,
+                    text="✅ دسترسی شما به سیستم مجدداً فعال شد."
+                )
+            except Exception:
+                pass
+        return
+
+    # ─── حذف کارفرما ───
+    if cmd.startswith("delete_tenant_"):
+        try:
+            tid = int(cmd.split("_")[2])
+        except Exception:
+            await update.message.reply_text("فرمت: /delete_tenant_<tenant_id>")
+            return
+        async with AsyncSessionLocal() as session:
+            tenant = await session.get(Tenant, tid)
+            if not tenant:
+                await update.message.reply_text("کارفرما پیدا نشد.")
+                return
+            name = tenant.name
+            tenant.is_active = False
+            tenant.subscription_status = "deleted"
+            await session.commit()
+            await update.message.reply_text(f"🗑 کارفرما «{name}» حذف شد.")
+        return
+
+    # ─── تأیید اشتراک ───
+    if cmd.startswith("approve_"):
+        segments = cmd.split("_")
+        try:
+            req_id = int(segments[1])
+            days = int(segments[2]) if len(segments) > 2 else 30
+        except (ValueError, IndexError):
+            await update.message.reply_text("فرمت: /approve_<id>_<days>")
+            return
+
+        async with AsyncSessionLocal() as session:
+            ok, admin_msg, tenant, owner_msg = await approve_request(
+                session, req_id, user.id,
+                admin_message=extra or None,
+                days=days,
+            )
+            await update.message.reply_text(admin_msg)
+            if ok and tenant:
+                try:
+                    await context.bot.send_message(
+                        chat_id=tenant.owner_telegram_id, text=owner_msg
+                    )
+                except Exception:
+                    pass
+
+    elif cmd.startswith("reject_"):
+        try:
+            req_id = int(cmd.split("_")[1])
+        except (ValueError, IndexError):
+            await update.message.reply_text("فرمت: /reject_<id>")
+            return
+
+        async with AsyncSessionLocal() as session:
+            ok, admin_msg, owner_tid = await reject_request(
+                session, req_id, user.id, reason=extra or None
+            )
+            await update.message.reply_text(admin_msg)
+            if ok and owner_tid:
+                try:
+                    await context.bot.send_message(
+                        chat_id=owner_tid,
+                        text="متأسفم، درخواستت تأیید نشد." + (f"\nدلیل: {extra}" if extra else "")
+                    )
+                except Exception:
+                    pass
     from app.core.config import settings
     from app.database.base import AsyncSessionLocal
     from app.modules.subscription_service import approve_request, reject_request
