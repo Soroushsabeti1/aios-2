@@ -78,16 +78,28 @@ async def _load_history(session: AsyncSession, tenant_id: int,
 
 
 async def _save_message(session: AsyncSession, tenant_id: int, user_id: int,
-                        message: dict):
+                        message: dict, extra_context: str = None):
     """یک پیام را در آرشیو دیتابیس ذخیره می‌کند."""
     role = message.get("role", "user")
     content = message.get("content")
     if isinstance(content, list):
-        # محتوای multimodal (متن + عکس) — فقط بخش متنی را برای آرشیو نگه می‌داریم
-        text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
-        content = " ".join(text_parts) or "[محتوای تصویری]"
+        text_parts = []
+        has_image = False
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") == "text":
+                    text_parts.append(p.get("text", ""))
+                elif p.get("type") == "image_url" or p.get("type") == "image":
+                    has_image = True
+        content_text = " ".join(text_parts) or ""
+        if has_image:
+            content_text = f"[عکس] {content_text}".strip()
+        content = content_text or "[محتوای تصویری]"
 
-    # اگر پیام ساختار پیچیده دارد (tool_calls یا tool result)، کل آن را JSON ذخیره کن
+    # اگه context اضافی داریم (مثلاً پیام فوروارد از کارمند)
+    if extra_context:
+        content = f"{extra_context}\n---\n{content}" if content else extra_context
+
     needs_raw = bool(message.get("tool_calls")) or role == "tool"
     raw_json = None
     if needs_raw:

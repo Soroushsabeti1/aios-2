@@ -417,10 +417,25 @@ async def consume_invite_link(session: AsyncSession, token: str,
     if link.password:
         if not password_attempt:
             return False, "PASSWORD_REQUIRED"
-        if _hash_password(password_attempt) != link.password:
-            # تلاش با plain text هم
-            if password_attempt != link.password:
-                return False, "PASSWORD_REQUIRED"
+        # normalize شماره تماس (با/بدون 0 یا 98)
+        attempts = [password_attempt]
+        p = password_attempt.strip()
+        if p.startswith("0"):
+            attempts.append(p[1:])
+            attempts.append("98" + p[1:])
+        elif p.startswith("98"):
+            attempts.append("0" + p[2:])
+            attempts.append(p[2:])
+        elif len(p) == 10:
+            attempts.append("0" + p)
+            attempts.append("98" + p)
+
+        matched = any(
+            _hash_password(a) == link.password or a == link.password
+            for a in attempts
+        )
+        if not matched:
+            return False, "WRONG_PASSWORD"
 
     # چک تکراری
     existing = await session.scalar(

@@ -504,7 +504,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if cred_step == "username":
                 context.user_data["pending_username"] = text
                 context.user_data["credential_step"] = "password"
-                await update.message.reply_text("🔑 پسوردت رو بفرست:")
+                await update.message.reply_text("🔑 گذرواژه‌ات رو بفرست (شماره تماس اولیه):")
                 return
 
             # ─── مرحله ورود با لینک: پسورد ───
@@ -520,10 +520,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data.pop("pending_invite_token", None)
                 context.user_data.pop("pending_username", None)
 
-                if msg == "PASSWORD_REQUIRED":
+                if msg in ("PASSWORD_REQUIRED", "WRONG_PASSWORD"):
                     context.user_data["credential_step"] = "username"
                     context.user_data["pending_invite_token"] = token
-                    await update.message.reply_text("🔑 یوزرنیم یا پسورد اشتباهه. یوزرنیمت رو دوباره بفرست (کد ملی):")
+                    if msg == "WRONG_PASSWORD":
+                        await update.message.reply_text("⚠️ گذرواژه اشتباهه. نام کاربری‌ات رو دوباره بفرست:")
+                    else:
+                        await update.message.reply_text("⚠️ نام کاربری یا گذرواژه اشتباهه. نام کاربری‌ات رو دوباره بفرست (کد ملی):")
                     return
 
                 if ok and msg.endswith("|CHANGE_CREDENTIALS"):
@@ -543,7 +546,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if result.startswith("✅"):
                     context.user_data["credential_step"] = "new_password"
                     await update.message.reply_text(
-                        f"{result}\nحالا پسورد جدیدت رو بفرست (حداقل ۸ کاراکتر):"
+                        f"{result}\nحالا گذرواژه جدیدت رو بفرست (حداقل ۸ کاراکتر، از حروف و عدد استفاده کن):"
                     )
                 else:
                     await update.message.reply_text(result)

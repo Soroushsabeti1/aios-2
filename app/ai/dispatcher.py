@@ -29,11 +29,12 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
     import logging as _log
     logger = _log.getLogger("moonax.tools")
 
-    # بررسی دسترسی
-    from app.modules import roles
-    if not roles.is_tool_allowed(role, tool_name):
-        logger.info(f"[TOOL✗ ACCESS] {tool_name} | role={role}")
-        return roles.get_denied_message(role)
+    # کارفرما به همه چیز دسترسی داره
+    if role != "owner":
+        from app.modules import roles
+        if not roles.is_tool_allowed(role, tool_name):
+            logger.info(f"[TOOL✗ ACCESS] {tool_name} | role={role}")
+            return roles.get_denied_message(role)
 
     logger.info(f"[TOOL→] {tool_name} | {json.dumps(args, ensure_ascii=False)[:300]}")
 
@@ -103,7 +104,12 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
 
         # ─── کالا و انبار ───
         if tool_name == "add_product":
-            return await inventory.add_product(session, tenant_id, **args)
+            result = await inventory.add_product(session, tenant_id, **args)
+            await _trigger_flows(session, tenant_id, "product_added",
+                                  {"product_name": args.get("name", ""),
+                                   "product_id": args.get("name", "")},
+                                  user_id)
+            return result
         if tool_name == "list_products":
             return await inventory.list_products(session, tenant_id, **args)
         if tool_name == "update_product":
@@ -367,26 +373,31 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             message_text = args.get("message", "")
             is_urgent = bool(args.get("is_urgent", False))
 
-            # پیدا کردن telegram_id کارفرما
             from app.database.models.tenant import Tenant
             tenant = await session.get(Tenant, tenant_id)
             if not tenant:
                 return "⚠️ مشکلی پیش اومد."
 
             role_fa = roles.ROLE_LABELS.get(person.role, person.role)
-            prefix = f"📩 پیام از {role_fa} «{person.full_name}»"
+            prefix = f"📩 {role_fa} «{person.full_name}» می‌گه"
             if is_urgent:
                 prefix = f"🚨 فوری — {prefix}"
             full_msg = f"{prefix}:\n\n{message_text}"
 
-            # ارسال واقعی به کارفرما
+            # ذخیره در تاریخچه کارفرما با context کامل
+            from app.ai.orchestrator import _save_message
+            await _save_message(session, tenant_id, tenant.owner_telegram_id, {
+                "role": "user",
+                "content": f"[پیام از {person.full_name}]: {message_text}",
+            })
+
             outbox.queue_message(user_id, {
                 "chat_id": tenant.owner_telegram_id,
                 "text": full_msg,
             })
 
             if is_urgent:
-                return "✅ پیام فوریت به کارفرما فرستاده شد."
+                return "✅ پیام فوری به کارفرما فرستاده شد."
             return "✅ پیامت به کارفرما فرستاده شد."
 
         if tool_name == "view_messages":
@@ -1011,14 +1022,15 @@ async def _trigger_flows(session, tenant_id: int, event_type: str,
         _sel(WorkFlow).where(
             WorkFlow.tenant_id == tenant_id,
             WorkFlow.is_active == True,
-            WorkFlow.trigger_type == "event",
         )
     )).all()
 
     for flow in flows:
         try:
             cond = _json.loads(flow.trigger_condition) if flow.trigger_condition else {}
-            if cond.get("event") != event_type:
+            # چک کن این فلو برای این رویداد هست
+            flow_event = cond.get("event", "")
+            if flow_event != event_type:
                 continue
 
             steps = _json.loads(flow.steps_json) if flow.steps_json else []

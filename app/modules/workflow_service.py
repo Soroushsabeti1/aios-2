@@ -29,21 +29,45 @@ async def create_workflow(session: AsyncSession, tenant_id: int,
     return f"✅ فلو «{name}» ثبت شد."
 
 
-async def list_workflows(session: AsyncSession, tenant_id: int) -> str:
+async def list_workflows(session: AsyncSession, tenant_id: int,
+                         detail: bool = False) -> str:
     flows = (await session.scalars(
         select(WorkFlow).where(WorkFlow.tenant_id == tenant_id)
         .order_by(WorkFlow.id.desc())
     )).all()
     if not flows:
         return "هیچ فلویی ثبت نشده."
-    lines = ["⚙️ فلوهای کاری:"]
+
+    lines = [f"⚙️ فلوهای کاری ({len(flows)} فلو):"]
     for f in flows:
         status = "🟢 فعال" if f.is_active else "🔴 غیرفعال"
         cond = json.loads(f.trigger_condition) if f.trigger_condition else {}
-        lines.append(f"• [{f.id}] {f.name} — {f.trigger_type} — {status}")
+        steps = json.loads(f.steps_json) if f.steps_json else []
+        lines.append(f"\n[{f.id}] {f.name} — {status}")
+        lines.append(f"   نوع: {f.trigger_type}")
         if cond.get("description"):
             lines.append(f"   شرط: {cond['description']}")
+        if cond.get("event"):
+            lines.append(f"   رویداد: {cond['event']}")
+        if f.target_role:
+            lines.append(f"   هدف: {f.target_role}")
+        if steps:
+            lines.append(f"   مراحل ({len(steps)}):")
+            for i, s in enumerate(steps, 1):
+                action = s.get("action", "")
+                msg = s.get("message", "")
+                target = s.get("target_role", s.get("target", ""))
+                lines.append(f"   {i}. {action}" + (f" → {target}" if target else "") + (f": {msg[:50]}" if msg else ""))
+        lines.append(f"   برای حذف: «فلو {f.id} رو حذف کن»")
     return "\n".join(lines)
+
+
+async def get_workflow_detail(session: AsyncSession, tenant_id: int,
+                               flow_id: int) -> str:
+    flow = await session.get(WorkFlow, flow_id)
+    if not flow or flow.tenant_id != tenant_id:
+        return "⚠️ فلو پیدا نشد."
+    return await list_workflows(session, tenant_id, detail=True)
 
 
 async def toggle_workflow(session: AsyncSession, tenant_id: int,

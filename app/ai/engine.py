@@ -44,11 +44,13 @@ def _tools_for_role(role: str, context_text: str = "") -> list:
 
     # بر اساس کانتکست
     context_tools = []
-    if any(w in ctx for w in ["کارمند","حقوق","فیش","پرسنل","استخدام"]):
+    if any(w in ctx for w in ["کارمند","حقوق","فیش","پرسنل","استخدام",
+                                  "اصلاح","تغییر","ویرایش","آپدیت","بروزرسانی"]):
         context_tools += ["add_employee","list_employees","update_employee","delete_employee",
                          "get_employee_detail","search_employees","employee_statistics",
                          "add_salary_payment","list_salary_payments","generate_settlement",
-                         "export_work_log","get_work_log_template","batch_export"]
+                         "export_work_log","get_work_log_template","batch_export",
+                         "update_customer","update_product"]
     if any(w in ctx for w in ["مشتری","خریدار","مشتریان"]):
         context_tools += ["add_customer","list_customers","update_customer","delete_customer",
                          "get_customer_detail","search_customers","customer_statistics",
@@ -74,12 +76,13 @@ def _tools_for_role(role: str, context_text: str = "") -> list:
         context_tools += ["create_employee_invite_link","create_customer_invite_link",
                          "create_collaborator_invite_link","list_invite_links",
                          "revoke_invite_link","revoke_all_invite_links"]
-    if any(w in ctx for w in ["فلو","دسترسی","اختیار","مجوز"]):
+    if any(w in ctx for w in ["فلو","دسترسی","اختیار","مجوز","جریان کاری","قانون"]):
         context_tools += ["create_workflow","list_workflows","delete_workflow","export_workflows_excel",
                          "grant_permission","list_permissions","revoke_permission","export_permissions_excel"]
-    if any(w in ctx for w in ["پیام","اطلاعیه","نظرسنجی","بفرست","اعلام"]):
+    if any(w in ctx for w in ["پیام","اطلاعیه","نظرسنجی","بفرست","اعلام","ارسال","فایل","pdf","اکسل"]):
         context_tools += ["send_announcement","create_poll","send_checklist",
-                         "send_broadcast","send_direct_message","view_messages","send_photo_to_person"]
+                         "send_broadcast","send_direct_message","view_messages",
+                         "send_photo_to_person","send_file_to_person"]
     if any(w in ctx for w in ["اکسل","خروجی","گزارش","دانلود"]):
         context_tools += ["export_excel","get_excel_template","export_invoice_excel",
                          "export_invoice_pdf","export_work_log","export_workflows_excel",
