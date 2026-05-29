@@ -1,0 +1,4 @@
+# پیکربندی Nixpacks برای Railway
+# ffmpeg برای پردازش ویس، libreoffice برای تولید PDF فیش تصفیه
+[phases.setup]
+nixPkgs = ["python311", "ffmpeg", "libreoffice"]
