@@ -442,6 +442,19 @@ async def _process_and_reply(update, context, session, tenant_id, user,
                     photo=_io.BytesIO(msg["photo_bytes"]),
                     caption=msg.get("caption") or "",
                 )
+            elif msg.get("type") == "document":
+                import io as _io
+                buf = msg.get("document_buf")
+                if buf:
+                    if not hasattr(buf, 'read'):
+                        buf = _io.BytesIO(buf)
+                    buf.seek(0)
+                    await context.bot.send_document(
+                        chat_id=msg["chat_id"],
+                        document=buf,
+                        filename=msg.get("filename", "file"),
+                        caption=msg.get("caption") or "",
+                    )
             else:
                 msg_text = msg.get("text", "")
                 msg_html = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', msg_text)

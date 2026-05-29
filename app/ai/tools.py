@@ -977,18 +977,33 @@ TOOLS += [
     # ─── فلو ───
     {"type": "function", "function": {
         "name": "create_workflow",
-        "description": "ایجاد فلو کاری خودکار. مثال: اگه کارمند جواب نداد به رضا بگو تماس بگیره",
+        "description": (
+            "ایجاد فلو کاری خودکار. "
+            "مثال: اگه کارمند جواب نداد به رضا بگو تماس بگیره | "
+            "هر بار که فاکتور تأیید شد برای گرافیست بفرست | "
+            "وقتی طراحی آماده شد برام بفرست"
+        ),
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string"},
             "trigger_type": {"type": "string",
-                            "enum": ["no_response", "deadline", "condition", "schedule"],
-                            "description": "نوع شرط"},
-            "trigger_description": {"type": "string", "description": "توضیح شرط به فارسی"},
+                            "enum": ["no_response", "deadline", "condition", "schedule", "event"],
+                            "description": "event=وقتی رویداد خاصی اتفاق افتاد"},
+            "event_type": {"type": "string",
+                          "description": "نوع رویداد: invoice_confirmed / task_completed / payment_received",
+                          "enum": ["invoice_confirmed", "task_completed", "payment_received", ""]},
+            "trigger_description": {"type": "string"},
             "steps": {"type": "array", "items": {"type": "object",
-                "properties": {"action": {"type": "string"}, "target": {"type": "string"},
-                               "message": {"type": "string"}, "delay_minutes": {"type": "integer"}}},
-                "description": "مراحل اجرا"},
-            "target_role": {"type": "string", "description": "فقط برای این نقش اجرا بشه"},
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["send_message", "send_file", "notify_owner"],
+                               "description": "send_file=ارسال فایل، send_message=ارسال پیام"},
+                    "target_role": {"type": "string", "description": "نقش گیرنده: employee/customer/..."},
+                    "message": {"type": "string"},
+                    "file_type": {"type": "string",
+                                  "description": "invoice=فاکتور، last_generated=آخرین فایل ساخته‌شده"},
+                    "delay_minutes": {"type": "integer"},
+                }}},
+            "target_role": {"type": "string"},
             "max_retries": {"type": "integer", "default": 3},
         }, "required": ["name", "trigger_type", "steps"]},
     }},
@@ -1170,5 +1185,23 @@ TOOLS += [
                          "enum": ["fa-female", "fa-male", "en-female", "en-male"],
                          "description": "fa-female=زن فارسی، fa-male=مرد فارسی"},
         }, "required": ["voice_key"]},
+    }},
+]
+
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "send_file_to_person",
+        "description": (
+            "ارسال هر نوع فایل (PDF، اکسل، عکس، فاکتور، گزارش، ...) به یک شخص. "
+            "مثال: فاکتور رو برای گرافیست بفرست | این PDF رو به علی بفرست | "
+            "خروجی طراحی رو برام بفرست | آخرین فایل رو به سارا بفرست"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "person_name": {"type": "string", "description": "نام گیرنده"},
+            "file_type": {"type": "string",
+                         "enum": ["invoice", "pdf", "excel", "last_generated", "uploaded", "any"],
+                         "description": "نوع فایل — any=هر فایلی که موجوده"},
+            "caption": {"type": "string", "description": "پیام همراه فایل"},
+        }, "required": ["person_name"]},
     }},
 ]

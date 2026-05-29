@@ -17,3 +17,8 @@ def add_file(user_id: int, buffer: io.BytesIO, filename: str):
 def pop_files(user_id: int) -> list[tuple[io.BytesIO, str]]:
     """همه فایل‌های در انتظار را برمی‌گرداند و صف را خالی می‌کند."""
     return _pending.pop(user_id, [])
+
+
+def peek_files(user_id: int) -> list[tuple[io.BytesIO, str]]:
+    """فایل‌ها را بدون پاک کردن برمی‌گرداند."""
+    return _pending.get(user_id, [])

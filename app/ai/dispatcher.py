@@ -135,7 +135,13 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
         if tool_name == "create_invoice":
             return await sales.create_invoice(session, tenant_id, **args)
         if tool_name == "confirm_invoice":
-            return await sales.confirm_invoice(session, tenant_id, **args)
+            result = await sales.confirm_invoice(session, tenant_id, **args)
+            # trigger فلوهای invoice_confirmed
+            await _trigger_flows(session, tenant_id, "invoice_confirmed",
+                                  {"invoice_id": args.get("invoice_id"),
+                                   "display_id": args.get("display_id", "")},
+                                  user_id)
+            return result
         if tool_name == "cancel_invoice":
             return await sales.cancel_invoice(session, tenant_id, **args)
         if tool_name == "list_invoices":
@@ -479,7 +485,6 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             return await persons_service.list_followups(session, tenant_id)
 
         if tool_name == "send_photo_to_person":
-            # عکس در pending_uploads ذخیره شده
             upload = pending_uploads.get_upload(user_id)
             if not upload:
                 return "⚠️ عکسی پیدا نکردم. اول عکس رو بفرست."
@@ -497,10 +502,76 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             )
             if not person:
                 return f"⚠️ «{person_name}» پیدا نشد یا به ربات وصل نشده."
-            import io as _io
-            import base64 as _b64
             outbox.queue_photo(user_id, person.telegram_id, photo_bytes, mime, caption)
             return f"📷 عکس برای «{person.full_name}» ارسال می‌شه."
+
+        if tool_name == "send_file_to_person":
+            """ارسال هر نوع فایل (PDF، اکسل، ...) که کاربر آپلود کرده یا سیستم ساخته به یک شخص."""
+            person_name = args.get("person_name", "")
+            caption = args.get("caption", "")
+            file_type = args.get("file_type", "any")  # invoice / pdf / excel / last_generated / any
+
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+
+            # پیدا کردن شخص
+            person = await session.scalar(
+                _sel(Person).where(
+                    Person.tenant_id == tenant_id,
+                    Person.full_name.ilike(f"%{person_name}%"),
+                    Person.telegram_id.isnot(None),
+                ).limit(1)
+            )
+            if not person:
+                return f"⚠️ «{person_name}» پیدا نشد یا به ربات وصل نشده."
+
+            # پیدا کردن فایل
+            file_bytes = None
+            fname = "file"
+
+            # ۱. آخرین فایل آپلود‌شده
+            upload = pending_uploads.get_upload(user_id)
+            if upload and file_type in ("any", "uploaded"):
+                photo_bytes, mime = upload
+                outbox.queue_photo(user_id, person.telegram_id, photo_bytes, mime, caption)
+                return f"✅ فایل برای «{person.full_name}» ارسال شد."
+
+            # ۲. فاکتور آخر
+            if file_type in ("invoice", "any"):
+                from app.modules.reports.invoice_excel import export_invoice_excel
+                from app.database.models.business import Invoice
+                last_inv = await session.scalar(
+                    _sel(Invoice).where(
+                        Invoice.tenant_id == tenant_id,
+                    ).order_by(Invoice.id.desc()).limit(1)
+                )
+                if last_inv:
+                    try:
+                        buf, fname = await export_invoice_excel(session, last_inv.id)
+                        if buf:
+                            file_bytes = buf
+                    except Exception:
+                        pass
+
+            # ۳. آخرین فایل تولیدشده توسط سیستم
+            if not file_bytes:
+                files = pending_files.peek_files(user_id)
+                if files:
+                    file_bytes, fname = files[-1]
+
+            if file_bytes:
+                import io as _io
+                buf = file_bytes if hasattr(file_bytes, 'read') else _io.BytesIO(file_bytes if isinstance(file_bytes, bytes) else file_bytes.getvalue())
+                outbox.queue_message(user_id, {
+                    "type": "document",
+                    "chat_id": person.telegram_id,
+                    "document_buf": buf,
+                    "filename": fname,
+                    "caption": caption,
+                })
+                return f"✅ فایل «{fname}» برای «{person.full_name}» ارسال شد."
+
+            return "⚠️ فایلی برای ارسال پیدا نشد. اول فایل رو آپلود کن یا بساز."
 
         # ─── اشتراک ───
         if tool_name == "request_trial":
@@ -794,9 +865,12 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
         # ─── فلو ───
         if tool_name == "create_workflow":
             from app.modules import workflow_service
-            trigger_condition = {"description": args.get("trigger_description", "")}
+            trigger_condition = {
+                "description": args.get("trigger_description", ""),
+                "event": args.get("event_type", ""),
+            }
             steps = args.get("steps", [])
-            return await workflow_service.create_workflow(
+            result = await workflow_service.create_workflow(
                 session, tenant_id,
                 name=args.get("name", ""),
                 trigger_type=args.get("trigger_type", "condition"),
@@ -805,6 +879,7 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
                 target_role=args.get("target_role"),
                 max_retries=args.get("max_retries", 3),
             )
+            return result
         if tool_name == "list_workflows":
             from app.modules import workflow_service
             return await workflow_service.list_workflows(session, tenant_id)
@@ -914,3 +989,97 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
     except Exception as e:
         logger.error(f"[TOOL✗ ERR] {tool_name} | {type(e).__name__}: {e}")
         return f"⚠️ خطا در اجرا: {e}"
+
+
+# ═══════════════════════════════════════
+# اجرای فلوهای رویداد‌محور
+# ═══════════════════════════════════════
+
+async def _trigger_flows(session, tenant_id: int, event_type: str,
+                          event_data: dict, owner_user_id: int):
+    """
+    وقتی یه رویداد اتفاق می‌افته، فلوهای مرتبط رو اجرا کن.
+    event_type: invoice_confirmed / task_completed / payment_received / ...
+    """
+    import json as _json
+    from app.database.models.business import WorkFlow, Person
+    from sqlalchemy import select as _sel
+    import logging as _log
+    logger = _log.getLogger("moonax.flows")
+
+    flows = (await session.scalars(
+        _sel(WorkFlow).where(
+            WorkFlow.tenant_id == tenant_id,
+            WorkFlow.is_active == True,
+            WorkFlow.trigger_type == "event",
+        )
+    )).all()
+
+    for flow in flows:
+        try:
+            cond = _json.loads(flow.trigger_condition) if flow.trigger_condition else {}
+            if cond.get("event") != event_type:
+                continue
+
+            steps = _json.loads(flow.steps_json) if flow.steps_json else []
+            logger.info(f"[FLOW→] {flow.name} | event={event_type}")
+
+            for step in steps:
+                action = step.get("action", "")
+                target_role = step.get("target_role", "")
+                message = step.get("message", "").format(**event_data)
+                file_type = step.get("file_type", "")
+
+                if action == "send_message":
+                    # ارسال پیام به نقش مشخص
+                    persons = (await session.scalars(
+                        _sel(Person).where(
+                            Person.tenant_id == tenant_id,
+                            Person.role == target_role,
+                            Person.telegram_id.isnot(None),
+                        )
+                    )).all()
+                    for p in persons:
+                        outbox.queue_message(owner_user_id, {
+                            "chat_id": p.telegram_id,
+                            "text": message,
+                        })
+
+                elif action == "send_file":
+                    # ارسال فایل به نقش مشخص
+                    persons = (await session.scalars(
+                        _sel(Person).where(
+                            Person.tenant_id == tenant_id,
+                            Person.role == target_role,
+                            Person.telegram_id.isnot(None),
+                        )
+                    )).all()
+                    if file_type == "invoice" and event_data.get("invoice_id"):
+                        try:
+                            from app.modules.reports.invoice_excel import export_invoice_excel
+                            buf, fname = await export_invoice_excel(
+                                session, event_data["invoice_id"]
+                            )
+                            if buf:
+                                for p in persons:
+                                    import io as _io
+                                    buf.seek(0)
+                                    outbox.queue_message(owner_user_id, {
+                                        "type": "document",
+                                        "chat_id": p.telegram_id,
+                                        "document_buf": _io.BytesIO(buf.read()),
+                                        "filename": fname,
+                                        "caption": message,
+                                    })
+                        except Exception as e:
+                            logger.error(f"[FLOW send_file error] {e}")
+
+                elif action == "notify_owner":
+                    outbox.queue_message(owner_user_id, {
+                        "chat_id": owner_user_id,
+                        "text": message,
+                    })
+
+        except Exception as e:
+            import logging as _log2
+            _log2.getLogger("moonax.flows").error(f"[FLOW ERROR] {flow.name}: {e}")

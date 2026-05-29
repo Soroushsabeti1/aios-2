@@ -15,6 +15,7 @@ def queue_message(owner_user_id: int,
     دو فرمت:
       queue_message(uid, telegram_id, "متن")
       queue_message(uid, {"chat_id": tid, "text": "متن"})
+      queue_message(uid, {"type": "document", "chat_id": tid, "document_buf": buf, "filename": ..., "caption": ...})
     """
     if isinstance(target_or_dict, dict):
         _outbox[owner_user_id].append(target_or_dict)
