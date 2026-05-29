@@ -992,6 +992,27 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             return f"📋 چک‌لیست برای {len(tg_ids)} نفر فرستاده شد."
 
         logger.info(f"[TOOL✗ UNKNOWN] {tool_name}")
+        if tool_name == "disconnect_person":
+            from app.modules.persons_service import disconnect_person
+            return await disconnect_person(session, tenant_id,
+                                           args.get("name", ""))
+
+        if tool_name == "request_account_deletion":
+            if not args.get("confirmed"):
+                return (
+                    "⚠️ قبل از حذف باید تأیید کنی.\n\n"
+                    "با حذف اکانت:\n"
+                    "• همه اطلاعات پاک میشه\n"
+                    "• کارمندان دسترسی‌شون قطع میشه\n"
+                    "• قابل بازگشت نیست\n\n"
+                    "یه بکاپ کامل برات می‌فرستم. تأیید می‌کنی؟"
+                )
+            from app.modules.account_service import create_full_backup, delete_tenant_account
+            buf = await create_full_backup(session, tenant_id)
+            pending_files.add_file(user_id, buf, "backup.zip")
+            result = await delete_tenant_account(session, tenant_id)
+            return f"📦 بکاپ کامل آماده شد و ارسال میشه.\n{result}"
+
         return f"⚠️ ابزار ناشناخته: {tool_name}"
 
     except TypeError as e:

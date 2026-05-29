@@ -454,8 +454,9 @@ async def consume_invite_link(session: AsyncSession, token: str,
         person = await session.get(Person, link.lock_to_person_id)
         if not person:
             return False, "⚠️ رکورد مرتبط پیدا نشد."
-        if person.is_connected:
-            return False, "⚠️ این لینک قبلاً استفاده شده."
+        # اگه قبلاً وصل بوده ولی قطع شده (telegram_id=None) → اجازه اتصال مجدد
+        if person.telegram_id and person.telegram_id != telegram_id:
+            return False, "⚠️ این لینک قبلاً توسط شخص دیگه‌ای استفاده شده."
         person.telegram_id = telegram_id
         person.telegram_username = telegram_username
         person.connected_at = datetime.now(timezone.utc)
@@ -655,3 +656,58 @@ async def get_due_followups(session: AsyncSession):
             PersonFollowup.next_send_at <= now,
         )
     )).all()
+
+
+# ═══════════════════════════════════════
+# قطع اتصال / اتصال مجدد / حذف
+# ═══════════════════════════════════════
+
+async def disconnect_person(session: AsyncSession, tenant_id: int,
+                             display_id_or_name: str) -> str:
+    """قطع اتصال — کارمند می‌مونه ولی از ربات جدا میشه."""
+    person = await _find_person(session, tenant_id, display_id_or_name)
+    if not person:
+        return f"⚠️ «{display_id_or_name}» پیدا نشد."
+    if not person.is_connected:
+        return f"⚠️ «{person.full_name}» اصلاً وصل نیست."
+
+    person.telegram_id = None
+    person.telegram_username = None
+    person.connected_at = None
+    # is_connected property از telegram_id محاسبه میشه
+
+    # لینک‌های قبلی رو هم revoke کن
+    from app.database.models.business import InviteLink
+    old_links = (await session.scalars(
+        select(InviteLink).where(
+            InviteLink.tenant_id == tenant_id,
+            InviteLink.lock_to_person_id == person.id,
+            InviteLink.is_revoked == False,
+        )
+    )).all()
+    for lk in old_links:
+        lk.is_revoked = True
+
+    await session.commit()
+    return (f"✅ «{person.full_name}» از ربات قطع شد.\n"
+            f"برای اتصال مجدد لینک دعوت جدید بساز.")
+
+
+async def _find_person(session: AsyncSession, tenant_id: int,
+                        query: str) -> "Person | None":
+    """پیدا کردن Person با نام یا display_id."""
+    q = query.strip().upper()
+    if q.startswith("PER-"):
+        return await session.scalar(
+            select(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.display_id == q,
+            )
+        )
+    return await session.scalar(
+        select(Person).where(
+            Person.tenant_id == tenant_id,
+            Person.full_name.ilike(f"%{query}%"),
+            Person.is_active == True,
+        ).limit(1)
+    )

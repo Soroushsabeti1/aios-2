@@ -1205,3 +1205,21 @@ TOOLS += [
         }, "required": ["person_name"]},
     }},
 ]
+
+# قطع اتصال، حذف اکانت
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "disconnect_person",
+        "description": "قطع اتصال کارمند از ربات — کارمند می‌مونه ولی دسترسی نداره. برای اتصال مجدد لینک جدید لازمه.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "نام کارمند"},
+        }, "required": ["name"]},
+    }},
+    {"type": "function", "function": {
+        "name": "request_account_deletion",
+        "description": "حذف کامل اکانت کارفرما — بکاپ می‌گیره و حذف می‌کنه",
+        "parameters": {"type": "object", "properties": {
+            "confirmed": {"type": "boolean", "description": "کارفرما تأیید کرده؟"},
+        }, "required": ["confirmed"]},
+    }},
+]

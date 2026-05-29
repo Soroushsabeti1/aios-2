@@ -392,9 +392,22 @@ async def _process_and_reply(update, context, session, tenant_id, user,
                                      image_data=image_data, image_mime=image_mime,
                                      role=role, person_role=person_role)
     except Exception as e:
-        import logging
+        import logging, traceback
         logging.exception(e)
-        reply = f"⚠️ یه مشکلی پیش اومد. دوباره امتحان کن.\n({type(e).__name__})"
+        err_detail = traceback.format_exc()[-500:]
+        reply = f"⚠️ یه مشکل فنی پیش اومد. تیم فنی خبر شد."
+        # ارسال خطا به ادمین
+        try:
+            from app.core.config import settings
+            admin_id = getattr(settings, 'admin_telegram_id', None)
+            if admin_id:
+                await context.bot.send_message(
+                    chat_id=int(admin_id),
+                    text=f"🚨 خطای سیستم:\nUser: {user.id}\nTenant: {tenant_id}\n\n<code>{err_detail}</code>",
+                    parse_mode="HTML",
+                )
+        except Exception:
+            pass
 
     # حذف پیام موقت
     if thinking_msg:
