@@ -352,7 +352,37 @@ async def receive_biz_name(update, context):
 
 
 
-async def cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receive_biz_name_voice(update, context):
+    """پردازش ویس در آنبوردینگ — تبدیل به متن و ادامه."""
+    from app.ai.stt_service import transcribe_voice
+    user = update.effective_user
+
+    try:
+        voice = update.message.voice or update.message.audio
+        if not voice:
+            await update.message.reply_text("ویس دریافت نشد. متن بنویس یا دوباره ویس بفرست.")
+            return ASKING_BIZ_NAME
+
+        file = await context.bot.get_file(voice.file_id)
+        import io
+        buf = io.BytesIO()
+        await file.download_to_memory(buf)
+        buf.seek(0)
+        audio_bytes = buf.read()
+
+        text = await transcribe_voice(audio_bytes, "audio/ogg")
+        if not text:
+            await update.message.reply_text("متوجه نشدم. دوباره بگو یا متن بنویس.")
+            return ASKING_BIZ_NAME
+
+        await update.message.reply_text(f"🎤 شنیدم: «{text}»")
+        # ادامه با متن تبدیل‌شده
+        update.message.text = text
+        return await receive_biz_name(update, context)
+
+    except Exception as e:
+        await update.message.reply_text("مشکلی با ویس پیش اومد. متن بنویس.")
+        return ASKING_BIZ_NAME
     await update.message.reply_text("باشه، هر وقت خواستی /start بزن.")
     return ConversationHandler.END
 
@@ -582,11 +612,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # موفق
                 context.user_data.pop("pending_invite_token", None)
                 context.user_data.pop("credential_fails", None)
+                # پاک کردن onboarding state — مهم!
+                context.user_data.pop("onboarding_step", None)
 
                 if ok and msg.endswith("|CHANGE_CREDENTIALS"):
                     real_msg = msg[:-len("|CHANGE_CREDENTIALS")]
                     await update.message.reply_text(real_msg)
                     context.user_data["credential_step"] = "new_username"
+                elif ok:
+                    context.user_data.pop("credential_step", None)
+                    await update.message.reply_text(msg)
+                    # پیام راهنمایی بعد از ورود موفق
+                    await update.message.reply_text(
+                        "هر وقت کاری داشتی بگو 😊"
+                    )
                 else:
                     context.user_data.pop("credential_step", None)
                     await update.message.reply_text(msg)
@@ -629,7 +668,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result = await persons_service.change_credentials(
                     session, user.id, new_password=text.strip()
                 )
-                context.user_data.pop("credential_step", None)
+                # پاک کردن همه state ها
+                for k in ["credential_step", "onboarding_step", "pending_invite_token",
+                          "credential_fails", "pending_username"]:
+                    context.user_data.pop(k, None)
+
                 await update.message.reply_text(
                     "✅ نام کاربری و گذرواژه‌ات ثبت شد!\n\n"
                     "🔒 محتوای چتت کاملاً خصوصیه — حتی کارفرما نمی‌تونه ببینه.\n\n"

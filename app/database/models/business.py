@@ -566,6 +566,7 @@ class TenantSettings(Base):
     onboarding_step: Mapped[str | None] = mapped_column(String(50), nullable=True)
     onboarding_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     autonomy_rules: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON قوانین خودمختاری
+    voice_key: Mapped[str | None] = mapped_column(String(20), nullable=True, default="nova")
     work_start_hour: Mapped[int] = mapped_column(Integer, default=9)
     work_end_hour: Mapped[int] = mapped_column(Integer, default=18)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

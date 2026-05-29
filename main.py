@@ -11,7 +11,7 @@ from telegram.ext import (
 from app.core.config import settings
 from app.database.base import init_db
 from app.handlers.telegram_handlers import (
-    start_command, receive_biz_name, cancel_start,
+    start_command, receive_biz_name, receive_biz_name_voice, cancel_start,
     reset_command, message_handler, file_handler, photo_handler, voice_handler,
     process_search_queue, weekly_report_job, critical_alerts_job, reminder_job,
     periodic_report_job, followup_job, trial_expiry_job,
@@ -62,15 +62,22 @@ def main():
         .build()
     )
 
-    # ConversationHandler برای /start
+    # ConversationHandler برای /start — با پشتیبانی از ویس
     start_conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start_command)],
+        entry_points=[
+            CommandHandler("start", start_command),
+        ],
         states={
             ASKING_BIZ_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_biz_name),
+                MessageHandler(filters.VOICE, receive_biz_name_voice),
+                MessageHandler(filters.AUDIO, receive_biz_name_voice),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_start)],
+        allow_reentry=True,
+        per_user=True,
+        per_chat=True,
     )
 
     app.add_handler(start_conv)

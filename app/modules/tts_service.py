@@ -151,14 +151,7 @@ async def set_voice(session, tenant_id: int, voice_key: str) -> str:
         ts = TenantSettings(tenant_id=tenant_id)
         session.add(ts)
 
-    docs = {}
-    if ts.business_docs_json:
-        try:
-            docs = _json.loads(ts.business_docs_json)
-        except Exception:
-            pass
-    docs["voice_key"] = voice_key
-    ts.business_docs_json = _json.dumps(docs, ensure_ascii=False)
+    ts.voice_key = voice_key
     await session.commit()
 
     info = VOICE_OPTIONS[voice_key]
@@ -183,12 +176,6 @@ async def get_voice_key(session, tenant_id: int) -> str:
     ts = await session.scalar(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
-    if ts and ts.business_docs_json:
-        try:
-            docs = _json.loads(ts.business_docs_json)
-            key = docs.get("voice_key", DEFAULT_VOICE)
-            if key in VOICE_OPTIONS:
-                return key
-        except Exception:
-            pass
+    if ts and ts.voice_key and ts.voice_key in VOICE_OPTIONS:
+        return ts.voice_key
     return DEFAULT_VOICE

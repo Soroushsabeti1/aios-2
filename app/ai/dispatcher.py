@@ -306,17 +306,49 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
         # ─── لینک‌های دعوت جدید ───
         if tool_name == "create_employee_invite_link":
             from app.core.runtime import get_bot_username
+            from app.database.models.business import Employee
+            from sqlalchemy import select as _sel2
+
+            person_name = args.get("person_name", "")
+            link_type = args.get("link_type", "")
+
+            # اگه link_type مشخص نشده، بر اساس اطلاعات کارمند تشخیص بده
+            if not link_type:
+                emp = await session.scalar(
+                    _sel2(Employee).where(
+                        Employee.tenant_id == tenant_id,
+                        Employee.name.ilike(f"%{person_name}%"),
+                    ).limit(1)
+                )
+                if emp:
+                    # چک فیلدهای اصلی
+                    missing = []
+                    for field in ["position", "department", "address"]:
+                        if not getattr(emp, field, None):
+                            missing.append(field)
+                    if missing:
+                        # اطلاعات ناقصه — بپرس
+                        missing_fa = {"position": "سمت", "department": "بخش", "address": "آدرس"}
+                        missing_names = [missing_fa.get(f, f) for f in missing]
+                        return (
+                            f"اطلاعات {emp.name} کامل نیست ({', '.join(missing_names)} خالیه).\n"
+                            f"ترجیح میدی خودت الان کامل کنی، یا کارمند موقع ورود پر کنه؟"
+                        )
+                    else:
+                        link_type = "prefilled"
+                else:
+                    link_type = "self"
+
             result = await persons_service.create_employee_invite_link(
                 session, tenant_id,
                 bot_username=get_bot_username(),
-                person_name=args.get("person_name", ""),
-                link_type=args.get("link_type", "self"),
+                person_name=person_name,
+                link_type=link_type,
                 expires_hours=args.get("expires_hours", 24 * 7),
             )
-            # اگه دو پیام جدا داشت، دومی رو به صف پیام اضافه کن
+            # ارسال دو پیام جدا
             if "||SPLIT_MSG||" in result:
                 parts = result.split("||SPLIT_MSG||", 1)
-                # پیام دوم (فوروارد) رو به کارفرما بفرست
                 outbox.queue_message(user_id, {
                     "chat_id": user_id,
                     "text": "👇 این پیام رو برای کارمند فوروارد کن:\n\n" + parts[1],
