@@ -457,6 +457,40 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
                 session, tenant_id
             )
 
+        if tool_name == "schedule_meetings":
+            from app.modules.goal_service import (
+                create_schedule_goal, get_persons_by_role, add_waiting
+            )
+            role_filter = args.get("role_filter", "employee")
+            owner_slots = args.get("owner_free_slots", "")
+            meeting_date = args.get("meeting_date", "فردا")
+            topic = args.get("meeting_topic", "جلسه خصوصی")
+
+            persons = await get_persons_by_role(session, tenant_id, role_filter)
+            if not persons:
+                return f"⚠️ هیچ {role_filter} متصلی پیدا نشد."
+
+            goal = await create_schedule_goal(
+                session, tenant_id, user_id, persons,
+                owner_slots, meeting_date, topic
+            )
+
+            # همزمان به همه پیام بده
+            from app.modules.goal_service import get_steps
+            steps = get_steps(goal)
+            for step in steps:
+                tid = step["person_telegram_id"]
+                await add_waiting(session, goal, tid, "زمان مناسب")
+                outbox.queue_message(user_id, {
+                    "chat_id": tid,
+                    "text": step["message"],
+                })
+
+            role_fa = {"employee": "کارمند", "customer": "مشتری",
+                       "collaborator": "همکار"}.get(role_filter, role_filter)
+            return (f"✅ به {len(persons)} {role_fa} همزمان پیام فرستادم.\n"
+                    f"وقتی جواب دادن، نتیجه رو بهت گزارش میدم.")
+
         if tool_name == "send_broadcast":
             message = args.get("message", "")
             role_filter = args.get("role_filter")
@@ -930,6 +964,201 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
         if tool_name == "add_task":
             from app.modules import project_service
             return await project_service.add_task(session, tenant_id, **args)
+        if tool_name == "relay_message_to_employee":
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            to_person = await session.scalar(_sel(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.full_name.ilike(f"%{args.get('to_name', '')}%"),
+                Person.telegram_id.isnot(None),
+            ).limit(1))
+            if not to_person:
+                return f"⚠️ «{args.get('to_name')}» پیدا نشد یا وصل نیست."
+            sender = await persons_service.get_person_by_telegram(session, user_id)
+            sender_name = sender.full_name if sender else "همکار"
+            msg_text = args.get("message", "")
+            full_msg = f"پیام از {sender_name}:\n{msg_text}"
+            outbox.queue_message(user_id, {"chat_id": to_person.telegram_id, "text": full_msg})
+            if args.get("expect_reply", True):
+                from app.modules.goal_service import create_approval_goal, add_waiting
+                goal = await create_approval_goal(
+                    session, tenant_id, user_id, to_person,
+                    question=full_msg,
+                    description=f"relay از {sender_name} به {to_person.full_name}",
+                    action_if_positive="notify_owner",
+                    message_if_positive=f"{to_person.full_name} پیام داد",
+                )
+                await add_waiting(session, goal, to_person.telegram_id, "reply")
+                return f"✅ پیام به {to_person.full_name} فرستاده شد. وقتی جواب داد برات می‌فرستم."
+            return f"✅ پیام به {to_person.full_name} فرستاده شد."
+
+        if tool_name == "transfer_file_to_employee":
+            upload = pending_uploads.get_upload(user_id)
+            files_list = pending_files.peek_files(user_id)
+            if not upload and not files_list:
+                return "⚠️ فایلی برای ارسال پیدا نشد."
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            to_person = await session.scalar(_sel(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.full_name.ilike(f"%{args.get('to_name', '')}%"),
+                Person.telegram_id.isnot(None),
+            ).limit(1))
+            if not to_person:
+                return f"⚠️ «{args.get('to_name')}» پیدا نشد."
+            sender = await persons_service.get_person_by_telegram(session, user_id)
+            caption = args.get("caption", "") or (f"از {sender.full_name}" if sender else "")
+            if upload:
+                photo_bytes, mime = upload
+                outbox.queue_photo(user_id, to_person.telegram_id, photo_bytes, mime, caption)
+            else:
+                import io as _io
+                buf, fname = files_list[-1]
+                buf.seek(0)
+                outbox.queue_message(user_id, {
+                    "type": "document",
+                    "chat_id": to_person.telegram_id,
+                    "document_buf": _io.BytesIO(buf.read()),
+                    "filename": fname,
+                    "caption": caption,
+                })
+            return f"✅ فایل به {to_person.full_name} فرستاده شد."
+
+        if tool_name == "apply_penalty_flow":
+            from app.database.models.business import Employee
+            from sqlalchemy import select as _sel
+            emp = await session.scalar(_sel(Employee).where(
+                Employee.tenant_id == tenant_id,
+                Employee.name.ilike(f"%{args.get('employee_name', '')}%"),
+            ).limit(1))
+            if not emp:
+                return f"⚠️ کارمند «{args.get('employee_name')}» پیدا نشد."
+            vtype = args.get("violation_type", "deadline_miss")
+            penalty_pct = float(args.get("penalty_percent", 0))
+            fire_after = int(args.get("fire_after_count", 0))
+            vtype_fa = {"deadline_miss": "ددلاین رد", "absence": "غیبت",
+                        "late": "تأخیر", "quality": "کیفیت پایین"}.get(vtype, vtype)
+            history = {}
+            if hasattr(emp, 'notes') and emp.notes:
+                try:
+                    history = json.loads(emp.notes)
+                except Exception:
+                    pass
+            violations = history.get("violations", [])
+            violations.append({"type": vtype, "date": datetime.now(timezone.utc).isoformat()})
+            history["violations"] = violations
+            total = len([v for v in violations if v["type"] == vtype])
+            if hasattr(emp, 'notes'):
+                emp.notes = json.dumps(history, ensure_ascii=False)
+            lines = [f"⚠️ تخلف «{vtype_fa}» برای {emp.name} ثبت شد — {total} بار"]
+            if penalty_pct > 0:
+                salary = float(emp.salary or 0)
+                lines.append(f"💸 جریمه: {penalty_pct}٪ = {salary*penalty_pct/100:,.0f} تومان")
+            if fire_after and total >= fire_after:
+                emp.is_active = False
+                lines.append(f"🔴 {emp.name} بعد از {total} تخلف اخراج شد.")
+            await session.commit()
+            return "\n".join(lines)
+
+        if tool_name == "get_productivity_report":
+            from app.database.models.business import Employee, DailyReport
+            from sqlalchemy import select as _sel
+            from datetime import timedelta
+            period = args.get("period", "week")
+            emp_name = args.get("employee_name", "")
+            days = {"today": 1, "week": 7, "month": 30}.get(period, 7)
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            q = _sel(Employee).where(Employee.tenant_id == tenant_id, Employee.is_active == True)
+            if emp_name:
+                q = q.where(Employee.name.ilike(f"%{emp_name}%"))
+            employees = (await session.scalars(q)).all()
+            if not employees:
+                return "⚠️ کارمندی پیدا نشد."
+            lines = [f"📊 بهره‌وری — {period}:\n"]
+            total_prod = 0
+            count = 0
+            for emp in employees:
+                rpts = (await session.scalars(
+                    _sel(DailyReport).where(
+                        DailyReport.employee_id == emp.id,
+                        DailyReport.report_date >= since,
+                    )
+                )).all()
+                if rpts:
+                    avg = sum(r.productivity_score or 0 for r in rpts) / len(rpts)
+                    total_prod += avg
+                    count += 1
+                    em = "🟢" if avg >= 80 else ("🟡" if avg >= 60 else "🔴")
+                    lines.append(f"{em} {emp.name}: {avg:.0f}٪")
+                else:
+                    lines.append(f"⚪ {emp.name}: گزارش نداره")
+            if count > 1:
+                lines.append(f"\n📈 میانگین: {total_prod/count:.0f}٪")
+            return "\n".join(lines)
+
+        if tool_name == "check_and_apply_autonomy":
+            from app.database.models.business import TenantSettings
+            from sqlalchemy import select as _sel
+            ts = await session.scalar(_sel(TenantSettings).where(TenantSettings.tenant_id == tenant_id))
+            if not ts:
+                return "⚠️ تنظیمات پیدا نشد."
+            rules = {}
+            if ts.autonomy_rules:
+                try:
+                    rules = json.loads(ts.autonomy_rules)
+                except Exception:
+                    pass
+            action = args.get("action_type", "")
+            approved = args.get("approved", False)
+            if approved:
+                rules[action] = {"condition": args.get("condition", "always"),
+                                  "approved_at": datetime.now(timezone.utc).isoformat()}
+                ts.autonomy_rules = json.dumps(rules, ensure_ascii=False)
+                await session.commit()
+                return f"✅ قانون ثبت شد — دفعه بعد {action} خودکار اجرا میشه."
+            else:
+                rules.pop(action, None)
+                ts.autonomy_rules = json.dumps(rules, ensure_ascii=False)
+                await session.commit()
+                return f"✅ ثبت شد — همیشه برای {action} تأیید می‌گیرم."
+
+        if tool_name == "set_task_scoped_permission":
+            from app.modules.goal_service import request_permission, approve_permission
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            person = await session.scalar(_sel(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.full_name.ilike(f"%{args.get('person_name', '')}%"),
+            ).limit(1))
+            if not person:
+                return "⚠️ شخص پیدا نشد."
+            req = await request_permission(
+                session, tenant_id, person.telegram_id, person.role,
+                args.get("resource_type", ""), args.get("action", "read"),
+            )
+            await approve_permission(session, req.id, approval_type="once")
+            return f"✅ دسترسی task-scoped برای «{person.full_name}» فعال شد."
+
+        if tool_name == "notify_person_joined":
+            """اطلاع‌رسانی داخلی — وقتی کسی وصل میشه."""
+            from app.modules.notification_service import notify_owner_member_joined
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            person = await session.scalar(
+                _sel(Person).where(Person.telegram_id == user_id)
+            )
+            if person:
+                from app.database.models.tenant import Tenant
+                tenant = await session.get(Tenant, tenant_id)
+                if tenant:
+                    import app.ai.outbox as _outbox
+                    await _trigger_flows(
+                        session, tenant_id, "employee_joined",
+                        {"person_name": person.full_name, "role": person.role},
+                        tenant.owner_telegram_id
+                    )
+            return "✅"
+
         if tool_name == "request_disconnect":
             person = await persons_service.get_person_by_telegram(session, user_id)
             if not person:
@@ -1098,6 +1327,102 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             pending_files.add_file(user_id, buf, "backup.zip")
             result = await delete_tenant_account(session, tenant_id)
             return f"📦 بکاپ کامل آماده شد و ارسال میشه.\n{result}"
+
+        if tool_name == "create_approval_goal":
+            from app.modules.goal_service import create_approval_goal, add_waiting
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            target = await session.scalar(_sel(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.full_name.ilike(f"%{args.get('target_name', '')}%"),
+                Person.telegram_id.isnot(None),
+            ).limit(1))
+            if not target:
+                return f"⚠️ «{args.get('target_name')}» پیدا نشد یا وصل نیست."
+            goal = await create_approval_goal(
+                session, tenant_id, user_id, target,
+                question=args.get("question", ""),
+                description=args.get("description", ""),
+                action_if_positive=args.get("action_if_positive", "notify_owner"),
+                message_if_positive=args.get("message_if_positive", ""),
+                action_if_negative=args.get("action_if_negative", "notify_owner"),
+                message_if_negative=args.get("message_if_negative", ""),
+            )
+            await add_waiting(session, goal, target.telegram_id, "approval")
+            outbox.queue_message(user_id, {
+                "chat_id": target.telegram_id,
+                "text": args.get("question", ""),
+            })
+            return f"✅ سوال برای «{target.full_name}» فرستاده شد."
+
+        if tool_name == "create_collection_goal":
+            from app.modules.goal_service import (
+                create_collection_goal, get_persons_by_role, add_waiting, get_steps
+            )
+            persons = await get_persons_by_role(
+                session, tenant_id, args.get("role_filter", "employee")
+            )
+            if not persons:
+                return "⚠️ هیچ شخص متصلی پیدا نشد."
+            goal = await create_collection_goal(
+                session, tenant_id, user_id, persons,
+                question=args.get("question", ""),
+                description=args.get("description", ""),
+            )
+            for step in get_steps(goal):
+                tid = step["person_telegram_id"]
+                await add_waiting(session, goal, tid, "info")
+                outbox.queue_message(user_id, {
+                    "chat_id": tid,
+                    "text": step["message"],
+                })
+            return f"✅ سوال برای {len(persons)} نفر فرستاده شد."
+
+        if tool_name == "request_permission_for_person":
+            from app.modules.goal_service import request_permission
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            person = await session.scalar(_sel(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.full_name.ilike(f"%{args.get('person_name', '')}%"),
+            ).limit(1))
+            if not person:
+                return "⚠️ شخص پیدا نشد."
+            req = await request_permission(
+                session, tenant_id,
+                person.telegram_id, person.role,
+                args.get("resource_type", ""),
+                args.get("action", "read"),
+            )
+            # به کارفرما پیشنهاد
+            from app.database.models.tenant import Tenant
+            tenant = await session.get(Tenant, tenant_id)
+            if tenant:
+                approval_type = args.get("suggested_approval_type", "once")
+                suggest_msg = (
+                    f"📋 «{person.full_name}» می‌خواد به {args.get('resource_type')} دسترسی داشته باشه.\n"
+                    f"پیشنهاد: {approval_type}\n"
+                    f"برای تأیید بگو: «درخواست {req.id} رو تأیید کن — {approval_type}»"
+                )
+                outbox.queue_message(user_id, {
+                    "chat_id": tenant.owner_telegram_id,
+                    "text": suggest_msg,
+                })
+            return f"✅ درخواست ثبت شد (ID: {req.id}). منتظر تأیید کارفرما."
+
+        if tool_name == "approve_permission_request":
+            from app.modules.goal_service import approve_permission
+            from datetime import timedelta
+            expires_at = None
+            if args.get("expires_days"):
+                expires_at = datetime.now(timezone.utc) + timedelta(days=args["expires_days"])
+            return await approve_permission(
+                session,
+                request_id=args.get("request_id"),
+                approval_type=args.get("approval_type", "always"),
+                expires_at=expires_at,
+                count=args.get("count"),
+            )
 
         if tool_name == "search_memory":
             from app.modules.memory_service import search_messages

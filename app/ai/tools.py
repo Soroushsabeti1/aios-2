@@ -1275,3 +1275,137 @@ TOOLS += [
         }, "required": ["file_record_id", "receiver_name"]},
     }},
 ]
+
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "schedule_meetings",
+        "description": (
+            "ست کردن جلسه با چند نفر — همزمان همه رو می‌پرسه و نتیجه رو گزارش میده. "
+            "مثال: «با هر کارمند فردا جلسه خصوصی ست کن، من ۱۲ تا ۱۶ آزادم»"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "owner_free_slots": {"type": "string",
+                                  "description": "ساعات آزاد کارفرما — مثل «۱۲ تا ۱۶»"},
+            "role_filter": {"type": "string",
+                           "enum": ["employee", "customer", "collaborator"],
+                           "description": "با کدوم نقش جلسه؟"},
+            "meeting_date": {"type": "string", "description": "تاریخ جلسه — مثل «فردا»"},
+            "meeting_topic": {"type": "string", "description": "موضوع جلسه"},
+        }, "required": ["owner_free_slots", "role_filter"]},
+    }},
+]
+
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "create_approval_goal",
+        "description": "گرفتن تأیید از شخص + اقدام بعدی بر اساس جواب. مثال: از علی بپرس موافقه، اگه آره بود به من خبر بده",
+        "parameters": {"type": "object", "properties": {
+            "target_name": {"type": "string"},
+            "question": {"type": "string"},
+            "description": {"type": "string"},
+            "action_if_positive": {"type": "string",
+                                   "enum": ["notify_owner", "ask_followup", "escalate"],
+                                   "description": "اگه موافق بود چیکار کنم"},
+            "message_if_positive": {"type": "string"},
+            "action_if_negative": {"type": "string",
+                                   "enum": ["notify_owner", "ask_followup", "escalate"]},
+            "message_if_negative": {"type": "string"},
+        }, "required": ["target_name", "question", "description"]},
+    }},
+    {"type": "function", "function": {
+        "name": "create_collection_goal",
+        "description": "جمع‌آوری اطلاعات از چند نفر. مثال: از همه کارمندا شماره حساب بگیر",
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "سوال — {name} جایگزین اسم میشه"},
+            "role_filter": {"type": "string", "enum": ["employee", "customer", "collaborator"]},
+            "description": {"type": "string"},
+        }, "required": ["question", "role_filter", "description"]},
+    }},
+    {"type": "function", "function": {
+        "name": "request_permission_for_person",
+        "description": "درخواست دسترسی برای یه کارمند — اولین بار به کارفرما پیشنهاد میشه",
+        "parameters": {"type": "object", "properties": {
+            "person_name": {"type": "string"},
+            "resource_type": {"type": "string",
+                              "enum": ["invoice", "employee", "report", "file", "customer", "product"]},
+            "action": {"type": "string", "enum": ["read", "write", "delete"]},
+            "suggested_approval_type": {"type": "string",
+                                         "enum": ["once", "always", "until_date"],
+                                         "description": "نوع تأیید پیشنهادی"},
+        }, "required": ["person_name", "resource_type", "action"]},
+    }},
+    {"type": "function", "function": {
+        "name": "approve_permission_request",
+        "description": "تأیید درخواست دسترسی توسط کارفرما",
+        "parameters": {"type": "object", "properties": {
+            "request_id": {"type": "integer"},
+            "approval_type": {"type": "string",
+                              "enum": ["once", "always", "until_date", "count"]},
+            "expires_days": {"type": "integer", "description": "اگه زمان‌دار باشه، چند روز"},
+            "count": {"type": "integer", "description": "اگه تعدادی باشه، چند بار"},
+        }, "required": ["request_id", "approval_type"]},
+    }},
+]
+
+# ─── Employee Relay کامل ───
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "relay_message_to_employee",
+        "description": "ارسال پیام از کارمند A به کارمند B از طریق AI. مثال: به رضا بگو قیمت محصول X چنده",
+        "parameters": {"type": "object", "properties": {
+            "from_name": {"type": "string"},
+            "to_name": {"type": "string"},
+            "message": {"type": "string"},
+            "expect_reply": {"type": "boolean", "default": True},
+        }, "required": ["to_name", "message"]},
+    }},
+    {"type": "function", "function": {
+        "name": "transfer_file_to_employee",
+        "description": "ارسال فایل از یه کارمند به کارمند دیگه با چک دسترسی",
+        "parameters": {"type": "object", "properties": {
+            "to_name": {"type": "string"},
+            "caption": {"type": "string"},
+            "file_type": {"type": "string", "enum": ["photo", "document", "any"]},
+        }, "required": ["to_name"]},
+    }},
+    {"type": "function", "function": {
+        "name": "apply_penalty_flow",
+        "description": "اعمال جریمه کارمند بر اساس تخلف. مثال: ۳ بار ددلاین رد کرد",
+        "parameters": {"type": "object", "properties": {
+            "employee_name": {"type": "string"},
+            "violation_type": {"type": "string",
+                               "enum": ["deadline_miss", "absence", "late", "quality"],
+                               "description": "نوع تخلف"},
+            "violation_count": {"type": "integer"},
+            "penalty_percent": {"type": "number", "description": "درصد جریمه از حقوق"},
+            "fire_after_count": {"type": "integer", "description": "بعد از چند بار اخراج"},
+        }, "required": ["employee_name", "violation_type"]},
+    }},
+    {"type": "function", "function": {
+        "name": "get_productivity_report",
+        "description": "گزارش بهره‌وری کارمند یا تیم. مثال: بهره‌وری این هفته چقدر بوده؟",
+        "parameters": {"type": "object", "properties": {
+            "employee_name": {"type": "string", "description": "خالی = همه تیم"},
+            "period": {"type": "string", "enum": ["today", "week", "month"], "default": "week"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "check_and_apply_autonomy",
+        "description": "چک کردن و ذخیره قوانین خودمختاری. وقتی کارفرما تأیید داد که دفعه بعد خودم انجام بدم",
+        "parameters": {"type": "object", "properties": {
+            "action_type": {"type": "string", "description": "نوع اقدامی که تأیید شده"},
+            "condition": {"type": "string", "description": "شرط اجرا"},
+            "approved": {"type": "boolean"},
+        }, "required": ["action_type", "approved"]},
+    }},
+    {"type": "function", "function": {
+        "name": "set_task_scoped_permission",
+        "description": "دسترسی محدود به یه تسک — وقتی تسک تموم شد دسترسی خودکار قطع میشه",
+        "parameters": {"type": "object", "properties": {
+            "person_name": {"type": "string"},
+            "task_id": {"type": "string"},
+            "resource_type": {"type": "string"},
+            "action": {"type": "string", "enum": ["read", "write"]},
+        }, "required": ["person_name", "task_id", "resource_type"]},
+    }},
+]

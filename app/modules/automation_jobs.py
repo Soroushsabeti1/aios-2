@@ -326,18 +326,18 @@ async def installment_overdue_job(context):
 # ═══════════════════════════════════════
 
 async def end_of_day_job(context):
-    """روزانه ۱۸ ایران — گزارش پایان روز + درخواست گزارش از کارمندان."""
+    """روزانه ۱۸ ایران — گزارش پایان روز + بهره‌وری + درخواست گزارش از کارمندان."""
     from app.database.base import AsyncSessionLocal
-    from app.database.models.business import Person
+    from app.database.models.business import Person, DailyReport, ProjectTask
     from app.database.models.tenant import Tenant
     from app.modules import daily_report_service
-    from sqlalchemy import select
+    from sqlalchemy import select, func
+    from datetime import date
 
     async with AsyncSessionLocal() as session:
         tenants = (await session.scalars(select(Tenant).where(Tenant.is_active == True))).all()
 
         for tenant in tenants:
-            # درخواست گزارش از کارمندان
             employees = (await session.scalars(
                 select(Person).where(
                     Person.tenant_id == tenant.id,
@@ -350,17 +350,49 @@ async def end_of_day_job(context):
                 try:
                     await context.bot.send_message(
                         chat_id=emp.telegram_id,
-                        text="گزارش کارهای امروزت رو بفرست. ورود، خروج، استراحت، تسک‌ها رو بگو."
+                        text=(
+                            "گزارش امروزت رو بفرست:\n"
+                            "• ورود و خروج چه ساعتی؟\n"
+                            "• چقدر استراحت داشتی؟\n"
+                            "• چی انجام دادی؟\n"
+                            "• مانعی داشتی؟"
+                        )
                     )
                 except Exception:
                     pass
 
+            # گزارش بهره‌وری تیم
+            today = date.today()
+            prod_lines = []
+            for emp in employees:
+                from app.modules.employees.service import get_employee_by_person
+                emp_rec = await session.scalar(
+                    select(__import__('app.database.models.business', fromlist=['Employee']).Employee).where(
+                        __import__('app.database.models.business', fromlist=['Employee']).Employee.tenant_id == tenant.id,
+                        __import__('app.database.models.business', fromlist=['Employee']).Employee.telegram_id == emp.telegram_id,
+                    ).limit(1)
+                )
+                report = await session.scalar(
+                    select(DailyReport).where(
+                        DailyReport.tenant_id == tenant.id,
+                        DailyReport.report_date == today,
+                    ).order_by(DailyReport.id.desc()).limit(1)
+                )
+                if report and report.productivity_score:
+                    score = report.productivity_score
+                    em = "🟢" if score >= 80 else ("🟡" if score >= 60 else "🔴")
+                    prod_lines.append(f"{em} {emp.full_name}: {score:.0f}٪")
+
             # گزارش کلی به کارفرما
             msg, _ = await daily_report_service.end_of_day_report(session, tenant.id)
+            full_msg = f"📊 گزارش پایان روز:\n\n{msg}"
+            if prod_lines:
+                full_msg += "\n\n📈 بهره‌وری:\n" + "\n".join(prod_lines)
+
             try:
                 await context.bot.send_message(
                     chat_id=tenant.owner_telegram_id,
-                    text=f"📊 گزارش پایان روز:\n\n{msg}"
+                    text=full_msg
                 )
             except Exception:
                 pass
@@ -418,7 +450,12 @@ async def weekly_incomplete_job(context):
 # Helper
 # ═══════════════════════════════════════
 
-async def _notify_owner(context, session, tenant_id: int, message: str):
+async def timed_goals_job(context):
+    """هر ۵ دقیقه — اجرای goal های زمان‌بندی‌شده."""
+    from app.database.base import AsyncSessionLocal
+    from app.modules.goal_service import execute_timed_goals
+    async with AsyncSessionLocal() as session:
+        await execute_timed_goals(context.bot, session)
     """ارسال پیام به کارفرما."""
     from app.database.models.tenant import Tenant
     tenant = await session.get(Tenant, tenant_id)

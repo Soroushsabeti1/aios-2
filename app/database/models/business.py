@@ -266,7 +266,50 @@ class FileRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
-class Reminder(Base):
+class ActiveGoal(Base):
+    """هدف فعال مکالمه — در دیتابیس ذخیره میشه (نه RAM)."""
+    __tablename__ = "active_goals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    description: Mapped[str] = mapped_column(String(500))
+    goal_type: Mapped[str] = mapped_column(String(50), default="general")
+    # steps_json: لیست مراحل با شرط‌های if/else
+    steps_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # waiting_for_json: {telegram_id: "چی منتظریم"}
+    waiting_for_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # results_json: {telegram_id: جواب}
+    results_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # context_json: اطلاعات کمکی
+    context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # escalation_json: زنجیره تشدید
+    escalation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active/done/cancelled
+    # زمان اجرا (برای timed goals)
+    execute_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # تعداد retry
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PermissionRequest(Base):
+    """درخواست دسترسی — اولین بار به کارفرما پیشنهاد داده میشه."""
+    __tablename__ = "permission_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    requester_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    requester_role: Mapped[str] = mapped_column(String(20))
+    resource_type: Mapped[str] = mapped_column(String(50))  # invoice/employee/report/file
+    resource_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(20))  # read/write/delete
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/approved/rejected
+    # نوع تأیید: once/always/until_date/count
+    approval_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    approval_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     """یادآور — کار زمان‌دار با هشدار قبل از موعد."""
     __tablename__ = "reminders"
     id: Mapped[int] = mapped_column(primary_key=True)

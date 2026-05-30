@@ -831,11 +831,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_reply = await communication_service.record_broadcast_reply(
                 session, tenant_id, user.id, text
             )
-            if is_reply:
-                # پیام رو به AI بده تا مکالمه هدفمند رو ادامه بده
-                person = await persons_service.get_person_by_telegram(session, user.id)
-                person_name = person.full_name if person else "کاربر"
-                # نگو "ثبت شد" — فقط طبیعی پاسخ بده
+
+            # چک goal های فعال در دیتابیس
+            from app.modules.goal_service import (
+                find_goal_by_reply, record_reply, process_next_step, get_waiting
+            )
+            active_goal = await find_goal_by_reply(session, tenant_id, user.id)
+
+            if is_reply or active_goal:
+                if active_goal:
+                    await record_reply(session, active_goal, user.id, text)
+                    await process_next_step(
+                        session, active_goal, text, user.id,
+                        context.bot,
+                        lambda uid, msg: outbox.queue_message(uid, msg)
+                    )
+
                 _person_role = role if kind == "person" else None
                 await _process_and_reply(update, context, session, tenant_id, user,
                                          text, role=role, person_role=_person_role)

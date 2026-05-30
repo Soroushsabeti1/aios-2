@@ -21,6 +21,7 @@ from app.handlers.telegram_handlers import (
 from app.modules.automation_jobs import (
     scrum_master_job,
     workflow_executor_job,
+    timed_goals_job,
     birthday_job,
     contract_expiry_job,
     installment_overdue_job,
@@ -136,6 +137,7 @@ def main():
 
     # اجرای فلوهای زمان‌بندی — هر ۱۵ دقیقه
     job_queue.run_repeating(workflow_executor_job, interval=15 * 60, first=90)
+    job_queue.run_repeating(timed_goals_job, interval=5 * 60, first=120)
 
     # تبریک تولد — روزانه ۸ صبح ایران (≈ 04:30 UTC)
     job_queue.run_daily(
