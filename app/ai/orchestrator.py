@@ -42,44 +42,15 @@ def _clean_reply(text: str) -> str:
 
 async def _load_history(session: AsyncSession, tenant_id: int,
                         user_id: int) -> list[dict]:
-    """آخرین N پیام مکالمه را از دیتابیس می‌خواند و به فرمت AI تبدیل می‌کند."""
-    rows = (await session.scalars(
-        select(ConversationMessage).where(
-            ConversationMessage.tenant_id == tenant_id,
-            ConversationMessage.user_telegram_id == user_id,
-        ).order_by(ConversationMessage.id.desc()).limit(MAX_CONTEXT_MESSAGES)
-    )).all()
-    # ترتیب صحیح (قدیم به جدید)
-    rows = list(reversed(rows))
-
-    history = []
-    for row in rows:
-        if row.raw_json:
-            # پیام assistant با tool_calls یا پیام tool — کل دیکشنری ذخیره شده
-            try:
-                history.append(json.loads(row.raw_json))
-                continue
-            except json.JSONDecodeError:
-                pass
-        # پیام ساده‌ی متنی
-        history.append({"role": row.role, "content": row.content or ""})
-
-    # اصلاح پنجره: اگر ابتدای تاریخچه با پیام‌های tool یتیم شروع شود
-    # (پیام assistant متناظرشان خارج از پنجره‌ی ۳۰تایی افتاده)، API خطا می‌دهد.
-    # این پیام‌های یتیم را از ابتدا حذف می‌کنیم.
-    while history and history[0].get("role") == "tool":
-        history.pop(0)
-    # همچنین اگر اولین پیام، assistantِ دارای tool_calls باشد ولی پیام‌های
-    # tool متناظرش حذف شده‌اند، آن را هم پاک می‌کنیم.
-    while history and history[0].get("role") == "assistant" and history[0].get("tool_calls"):
-        history.pop(0)
-
-    return history
+    """آخرین N پیام مکالمه را از دیتابیس می‌خواند."""
+    from app.modules.memory_service import get_recent_messages
+    return await get_recent_messages(session, tenant_id, user_id, limit=MAX_CONTEXT_MESSAGES)
 
 
 async def _save_message(session: AsyncSession, tenant_id: int, user_id: int,
                         message: dict, extra_context: str = None):
     """یک پیام را در آرشیو دیتابیس ذخیره می‌کند."""
+    from app.modules.memory_service import save_message as _save
     role = message.get("role", "user")
     content = message.get("content")
     if isinstance(content, list):
@@ -89,33 +60,22 @@ async def _save_message(session: AsyncSession, tenant_id: int, user_id: int,
             if isinstance(p, dict):
                 if p.get("type") == "text":
                     text_parts.append(p.get("text", ""))
-                elif p.get("type") == "image_url" or p.get("type") == "image":
+                elif p.get("type") in ("image_url", "image"):
                     has_image = True
         content_text = " ".join(text_parts) or ""
         if has_image:
             content_text = f"[عکس] {content_text}".strip()
         content = content_text or "[محتوای تصویری]"
 
-    # اگه context اضافی داریم (مثلاً پیام فوروارد از کارمند)
     if extra_context:
         content = f"{extra_context}\n---\n{content}" if content else extra_context
 
     needs_raw = bool(message.get("tool_calls")) or role == "tool"
-    raw_json = None
-    if needs_raw:
-        try:
-            raw_json = json.dumps(message, ensure_ascii=False)
-        except (TypeError, ValueError):
-            raw_json = None
+    raw_json = message if needs_raw else None
 
-    session.add(ConversationMessage(
-        tenant_id=tenant_id,
-        user_telegram_id=user_id,
-        role=role,
-        content=content if isinstance(content, str) else None,
-        raw_json=raw_json,
-    ))
-    await session.commit()
+    await _save(session, tenant_id, user_id, role,
+                content if isinstance(content, str) else "",
+                raw_json=raw_json)
 
 
 async def handle_message(session: AsyncSession, tenant_id: int,

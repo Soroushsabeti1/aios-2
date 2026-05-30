@@ -1077,6 +1077,81 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             result = await delete_tenant_account(session, tenant_id)
             return f"📦 بکاپ کامل آماده شد و ارسال میشه.\n{result}"
 
+        if tool_name == "search_memory":
+            from app.modules.memory_service import search_messages
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            person_name = args.get("person_name", "")
+            sender_id = None
+            if person_name:
+                p = await session.scalar(_sel(Person).where(
+                    Person.tenant_id == tenant_id,
+                    Person.full_name.ilike(f"%{person_name}%"),
+                ).limit(1))
+                if p:
+                    sender_id = p.telegram_id
+            results = await search_messages(session, tenant_id,
+                                             args.get("query", ""),
+                                             user_telegram_id=sender_id)
+            if not results:
+                return "چیزی پیدا نشد."
+            lines = [f"🔍 نتایج جستجو:"]
+            for r in results[:10]:
+                lines.append(f"[{r['date']}] {r['from']}: {r['content'][:100]}")
+            return "\n".join(lines)
+
+        if tool_name == "get_thread_summary":
+            from app.modules.memory_service import get_thread_summary
+            return await get_thread_summary(session, tenant_id, args.get("topic", ""))
+
+        if tool_name == "search_files":
+            from app.modules.memory_service import search_files
+            from app.database.models.business import Person
+            from sqlalchemy import select as _sel
+            sender_id = None
+            if args.get("sender_name"):
+                p = await session.scalar(_sel(Person).where(
+                    Person.tenant_id == tenant_id,
+                    Person.full_name.ilike(f"%{args['sender_name']}%"),
+                ).limit(1))
+                if p:
+                    sender_id = p.telegram_id
+            ft = args.get("file_type", "any")
+            results = await search_files(session, tenant_id,
+                                          query=args.get("query"),
+                                          sender_telegram_id=sender_id,
+                                          file_type=None if ft == "any" else ft)
+            if not results:
+                return "فایلی پیدا نشد."
+            lines = ["📎 فایل‌های یافت‌شده:"]
+            for r in results:
+                lines.append(f"[{r['id']}] {r['from']} — {r['file_type']} — {r['file_name'] or r['caption'] or '—'} — {r['date']}")
+            lines.append("\nبرای ارسال مجدد: شناسه فایل رو بگو")
+            return "\n".join(lines)
+
+        if tool_name == "resend_file":
+            from app.modules.memory_service import search_files
+            from app.database.models.business import Person, FileRecord
+            from sqlalchemy import select as _sel
+            rec = await session.get(FileRecord, args.get("file_record_id"))
+            if not rec or not rec.file_id:
+                return "⚠️ فایل پیدا نشد یا قابل ارسال مجدد نیست."
+            person = await session.scalar(_sel(Person).where(
+                Person.tenant_id == tenant_id,
+                Person.full_name.ilike(f"%{args.get('receiver_name', '')}%"),
+                Person.telegram_id.isnot(None),
+            ).limit(1))
+            if not person:
+                return f"⚠️ «{args.get('receiver_name')}» پیدا نشد یا وصل نیست."
+            outbox.queue_message(user_id, {
+                "type": "resend_file",
+                "chat_id": person.telegram_id,
+                "file_id": rec.file_id,
+                "file_type": rec.file_type,
+                "caption": args.get("caption") or rec.caption or "",
+            })
+            return f"✅ فایل برای «{person.full_name}» ارسال میشه."
+
         return f"⚠️ ابزار ناشناخته: {tool_name}"
 
     except TypeError as e:

@@ -230,8 +230,39 @@ class ConversationMessage(Base):
     user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     role: Mapped[str] = mapped_column(String(20))  # user / assistant / tool
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # برای پیام‌های assistant که tool صدا زدن یا tool result، کل دیکشنری JSON ذخیره می‌شه
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_thread_id: Mapped[int | None] = mapped_column(ForeignKey("shared_contexts.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SharedContext(Base):
+    """نخ ارتباطی — موضوع مشترک بین چند نقش."""
+    __tablename__ = "shared_contexts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    topic: Mapped[str] = mapped_column(String(200))  # «رضایی»، «فاکتور ۱۲»، «پروژه X»
+    topic_type: Mapped[str | None] = mapped_column(String(50), nullable=True)  # customer/invoice/project/general
+    topic_ref_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # id موجودیت مرتبط
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # خلاصه هوشمند
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FileRecord(Base):
+    """ثبت همه فایل‌های رد و بدل شده."""
+    __tablename__ = "file_records"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    sender_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    sender_role: Mapped[str] = mapped_column(String(20))
+    receiver_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    receiver_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    file_type: Mapped[str] = mapped_column(String(20))  # photo/document/voice/video
+    file_id: Mapped[str | None] = mapped_column(String(200), nullable=True)  # telegram file_id
+    file_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_thread_id: Mapped[int | None] = mapped_column(ForeignKey("shared_contexts.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 

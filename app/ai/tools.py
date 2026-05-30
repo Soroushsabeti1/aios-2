@@ -1233,3 +1233,39 @@ TOOLS += [
         }},
     }},
 ]
+
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "search_memory",
+        "description": "جستجو در تاریخچه مکالمات. مثال: «رضایی چی گفت؟» «هفته پیش چی صحبت کردیم؟»",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "کلمه کلیدی جستجو"},
+            "person_name": {"type": "string", "description": "نام شخص (اختیاری)"},
+        }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "get_thread_summary",
+        "description": "خلاصه وضعیت یه موضوع از همه نقش‌ها. مثال: «رضایی چی شد؟» «وضعیت پروژه X؟»",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "موضوع مورد نظر"},
+        }, "required": ["topic"]},
+    }},
+    {"type": "function", "function": {
+        "name": "search_files",
+        "description": "جستجوی فایل‌های ارسال‌شده. مثال: «PDF که علی فرستاد» «آخرین عکس»",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "sender_name": {"type": "string"},
+            "file_type": {"type": "string", "enum": ["photo", "document", "voice", "video", "any"]},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "resend_file",
+        "description": "ارسال مجدد فایل قبلی. مثال: «همون PDF که فرستادم رو دوباره برای رضا بفرست»",
+        "parameters": {"type": "object", "properties": {
+            "file_record_id": {"type": "integer", "description": "شناسه فایل از search_files"},
+            "receiver_name": {"type": "string", "description": "نام گیرنده"},
+            "caption": {"type": "string"},
+        }, "required": ["file_record_id", "receiver_name"]},
+    }},
+]

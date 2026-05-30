@@ -567,7 +567,22 @@ async def _process_and_reply(update, context, session, tenant_id, user,
                     photo=_io.BytesIO(msg["photo_bytes"]),
                     caption=msg.get("caption") or "",
                 )
-            elif msg.get("type") == "document":
+            elif msg.get("type") == "resend_file":
+                ftype = msg.get("file_type", "document")
+                fid = msg.get("file_id")
+                cap = msg.get("caption") or ""
+                cid = msg["chat_id"]
+                try:
+                    if ftype == "photo":
+                        await context.bot.send_photo(chat_id=cid, photo=fid, caption=cap)
+                    elif ftype == "voice":
+                        await context.bot.send_voice(chat_id=cid, voice=fid, caption=cap)
+                    elif ftype == "video":
+                        await context.bot.send_video(chat_id=cid, video=fid, caption=cap)
+                    else:
+                        await context.bot.send_document(chat_id=cid, document=fid, caption=cap)
+                except Exception:
+                    pass
                 import io as _io
                 buf = msg.get("document_buf")
                 if buf:
@@ -694,7 +709,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # موفق
                 context.user_data.pop("pending_invite_token", None)
                 context.user_data.pop("credential_fails", None)
-                # پاک کردن onboarding state — مهم!
                 context.user_data.pop("onboarding_step", None)
 
                 if ok and msg.endswith("|CHANGE_CREDENTIALS"):
@@ -704,10 +718,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif ok:
                     context.user_data.pop("credential_step", None)
                     await update.message.reply_text(msg)
-                    # پیام راهنمایی بعد از ورود موفق
-                    await update.message.reply_text(
-                        "هر وقت کاری داشتی بگو 😊"
-                    )
+                    await update.message.reply_text("هر وقت کاری داشتی بگو 😊")
+                    # اطلاع‌رسانی به کارفرما
+                    try:
+                        from app.modules.notification_service import notify_owner_member_joined
+                        person = await persons_service.get_person_by_telegram(session, user.id)
+                        if person:
+                            await notify_owner_member_joined(
+                                context.bot, session, person.tenant_id, person
+                            )
+                    except Exception:
+                        pass
                 else:
                     context.user_data.pop("credential_step", None)
                     await update.message.reply_text(msg)
@@ -1006,6 +1027,22 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result + "\n\nاز این به بعد روی فاکتورها و گزارش‌های PDF نمایش داده می‌شه."
             )
             return
+
+        # ذخیره فایل در حافظه
+        try:
+            from app.modules.memory_service import save_file_record
+            tg_file = update.message.photo[-1] if update.message.photo else None
+            file_id = tg_file.file_id if tg_file else None
+            await save_file_record(
+                session, tenant_id,
+                sender_telegram_id=user.id,
+                sender_role=role,
+                file_type="photo",
+                file_id=file_id,
+                caption=caption,
+            )
+        except Exception:
+            pass
 
         # حالت عادی: عکس را به AI بده + توی دیتابیس موقت ذخیره کن
         pending_uploads.set_upload(user.id, photo_bytes, "image/jpeg")
