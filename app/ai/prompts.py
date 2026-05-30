@@ -230,11 +230,7 @@ def get_system_prompt(person_role: str = None, settings: dict = None) -> str:
 ۵. هرگز نگو «نمی‌تونم» — از tool مناسب استفاده کن.
 """
 
-    return base + "\n\n" + tmpl.format(
-            name=person_name or "کاربر",
-            biz_name=biz_name,
-            tone_desc=tone_desc,
-        )
+    return base
     if person_role == "customer":
         pass
 
