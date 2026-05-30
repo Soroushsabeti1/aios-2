@@ -219,7 +219,12 @@ async def _finalize_goal(session, goal: ActiveGoal, bot) -> str:
     except Exception:
         pass
 
-    await complete_goal(session, goal)
+    # اگه recurring باشه، دوباره راه‌اندازی کن
+    ctx_data = json.loads(goal.context_json or "{}")
+    if ctx_data.get("recurring"):
+        await restart_recurring_goal(session, goal, bot)
+    else:
+        await complete_goal(session, goal)
     return "گزارش به کارفرما فرستاده شد."
 
 
@@ -480,3 +485,428 @@ async def create_approval_goal(session: AsyncSession, tenant_id: int,
         steps=steps,
         goal_type="approval",
     )
+
+
+# ═══════════════════════════════════════
+# Permission Engine پیشرفته
+# ═══════════════════════════════════════
+
+async def check_advanced_permission(session: AsyncSession, tenant_id: int,
+                                     requester_telegram_id: int,
+                                     resource_type: str, action: str,
+                                     amount: float = None,
+                                     category: str = None,
+                                     entity_id: int = None,
+                                     task_id: int = None,
+                                     project_id: int = None) -> tuple[bool, str]:
+    """
+    چک دسترسی پیشرفته با همه شرایط:
+    threshold, category, time-of-day, entity, task, project
+    Returns: (allowed, reason)
+    """
+    from datetime import datetime, timezone
+    import json
+
+    now = datetime.now(timezone.utc)
+    current_hour = now.hour
+
+    # دریافت همه permission های تأییدشده
+    perms = (await session.scalars(
+        select(PermissionRequest).where(
+            PermissionRequest.tenant_id == tenant_id,
+            PermissionRequest.requester_telegram_id == requester_telegram_id,
+            PermissionRequest.resource_type == resource_type,
+            PermissionRequest.action == action,
+            PermissionRequest.status == "approved",
+        )
+    )).all()
+
+    for perm in perms:
+        meta = {}
+        try:
+            if hasattr(perm, 'meta_json') and perm.meta_json:
+                meta = json.loads(perm.meta_json)
+        except Exception:
+            pass
+
+        # چک entity خاص
+        if entity_id and meta.get("entity_id") and meta["entity_id"] != entity_id:
+            continue
+
+        # چک task خاص
+        if task_id and meta.get("task_id") and meta["task_id"] != task_id:
+            continue
+
+        # چک project خاص
+        if project_id and meta.get("project_id") and meta["project_id"] != project_id:
+            continue
+
+        # چک threshold مبلغ
+        if amount is not None and meta.get("max_amount"):
+            if amount > float(meta["max_amount"]):
+                return False, f"مبلغ {amount:,.0f} بالاتر از حد مجاز {meta['max_amount']:,.0f}ه"
+
+        # چک category
+        if category and meta.get("allowed_categories"):
+            if category not in meta["allowed_categories"]:
+                return False, f"دسته‌بندی «{category}» مجاز نیست"
+
+        # چک time-of-day
+        if meta.get("time_start") and meta.get("time_end"):
+            t_start = int(meta["time_start"])
+            t_end = int(meta["time_end"])
+            if not (t_start <= current_hour <= t_end):
+                return False, f"فقط بین ساعت {t_start} تا {t_end} مجازه"
+
+        # چک انقضا
+        if perm.approval_type == "until_date" and perm.approval_expires_at:
+            exp = perm.approval_expires_at
+            if exp.tzinfo is None:
+                from datetime import timezone as _tz
+                exp = exp.replace(tzinfo=_tz.utc)
+            if exp < now:
+                continue
+
+        # چک تعداد
+        if perm.approval_type == "count":
+            if not perm.approval_count or perm.approval_count <= 0:
+                continue
+            perm.approval_count -= 1
+            await session.commit()
+
+        # همه شرایط OK
+        return True, "مجاز"
+
+    return False, "دسترسی ندارد"
+
+
+async def create_advanced_permission(session: AsyncSession, tenant_id: int,
+                                      requester_telegram_id: int, requester_role: str,
+                                      resource_type: str, action: str,
+                                      approval_type: str = "always",
+                                      max_amount: float = None,
+                                      allowed_categories: list = None,
+                                      time_start: int = None,
+                                      time_end: int = None,
+                                      entity_id: int = None,
+                                      task_id: int = None,
+                                      project_id: int = None,
+                                      expires_days: int = None) -> PermissionRequest:
+    """ساخت permission پیشرفته با همه شرایط."""
+    import json
+    from datetime import timedelta
+
+    meta = {}
+    if max_amount: meta["max_amount"] = max_amount
+    if allowed_categories: meta["allowed_categories"] = allowed_categories
+    if time_start is not None: meta["time_start"] = time_start
+    if time_end is not None: meta["time_end"] = time_end
+    if entity_id: meta["entity_id"] = entity_id
+    if task_id: meta["task_id"] = task_id
+    if project_id: meta["project_id"] = project_id
+
+    expires_at = None
+    if expires_days:
+        from datetime import timezone
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
+
+    req = PermissionRequest(
+        tenant_id=tenant_id,
+        requester_telegram_id=requester_telegram_id,
+        requester_role=requester_role,
+        resource_type=resource_type,
+        action=action,
+        status="approved",
+        approval_type=approval_type,
+        approval_expires_at=expires_at,
+    )
+    # meta_json در صورت وجود فیلد
+    if hasattr(req, 'meta_json'):
+        req.meta_json = json.dumps(meta, ensure_ascii=False)
+    session.add(req)
+    await session.commit()
+    return req
+
+
+async def get_hierarchical_approver(session: AsyncSession, tenant_id: int,
+                                     person_telegram_id: int) -> "Person | None":
+    """پیدا کردن سرپرست یه شخص برای hierarchical approval."""
+    person = await session.scalar(
+        select(Person).where(Person.telegram_id == person_telegram_id)
+    )
+    if not person:
+        return None
+    # پیدا کردن سرپرست (role بالاتر)
+    role_hierarchy = ["customer", "collaborator", "employee", "owner"]
+    current_idx = role_hierarchy.index(person.role) if person.role in role_hierarchy else 0
+    if current_idx >= len(role_hierarchy) - 1:
+        return None
+    # پیدا کردن کسی با نقش بالاتر
+    higher_role = role_hierarchy[current_idx + 1]
+    return await session.scalar(
+        select(Person).where(
+            Person.tenant_id == tenant_id,
+            Person.role == higher_role,
+            Person.telegram_id.isnot(None),
+        ).limit(1)
+    )
+
+
+async def send_autonomy_reminders(bot, session: AsyncSession):
+    """یادآوری دوره‌ای به کارفرماها — دسترسی‌های فعال."""
+    from app.database.models.business import TenantSettings
+    from app.database.models.tenant import Tenant
+    from datetime import timedelta
+    import json
+
+    tenants = (await session.scalars(
+        select(Tenant).where(Tenant.is_active == True)
+    )).all()
+
+    for tenant in tenants:
+        ts = await session.scalar(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        if not ts or not ts.autonomy_rules:
+            continue
+        try:
+            rules = json.loads(ts.autonomy_rules)
+        except Exception:
+            continue
+        if not rules:
+            continue
+        # هر ۳۰ روز یادآوری
+        last_reminder_key = "last_autonomy_reminder"
+        docs = {}
+        if ts.business_docs_json:
+            try:
+                docs = json.loads(ts.business_docs_json)
+            except Exception:
+                pass
+        from datetime import timezone
+        last = docs.get(last_reminder_key)
+        now = datetime.now(timezone.utc)
+        if last:
+            last_dt = datetime.fromisoformat(last)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            if now - last_dt < timedelta(days=30):
+                continue
+        # ارسال یادآوری
+        rule_names = list(rules.keys())
+        msg = (
+            "📋 یادآوری دوره‌ای دسترسی‌های فعال:\n\n"
+            + "\n".join(f"• {r}" for r in rule_names[:5])
+            + ("\n..." if len(rule_names) > 5 else "")
+            + "\n\nمیخوای تغییری بدی؟ «لیست دسترسی‌ها» رو بنویس."
+        )
+        try:
+            await bot.send_message(chat_id=tenant.owner_telegram_id, text=msg)
+            docs[last_reminder_key] = now.isoformat()
+            ts.business_docs_json = json.dumps(docs, ensure_ascii=False)
+            await session.commit()
+        except Exception:
+            pass
+
+
+async def create_recurring_goal(session: AsyncSession, tenant_id: int,
+                                  owner_user_id: int, description: str,
+                                  steps_template: list,
+                                  repeat_interval_days: int = 7,
+                                  context: dict = None) -> "ActiveGoal":
+    """Goal تکراری — هر X روز دوباره اجرا میشه."""
+    from datetime import timezone, timedelta
+    ctx = context or {}
+    ctx["recurring"] = True
+    ctx["repeat_days"] = repeat_interval_days
+    next_run = datetime.now(timezone.utc) + timedelta(days=repeat_interval_days)
+    return await create_goal(
+        session, tenant_id, owner_user_id,
+        description=description,
+        steps=steps_template,
+        goal_type="recurring",
+        context=ctx,
+        execute_at=next_run,
+    )
+
+
+async def restart_recurring_goal(session: AsyncSession, goal: "ActiveGoal",
+                                   bot) -> None:
+    """بعد از تموم شدن goal تکراری، یه نسخه جدید میسازه."""
+    from datetime import timezone, timedelta
+    ctx = json.loads(goal.context_json or "{}")
+    if not ctx.get("recurring"):
+        return
+    repeat_days = int(ctx.get("repeat_days", 7))
+    next_run = datetime.now(timezone.utc) + timedelta(days=repeat_days)
+    # reset goal
+    goal.status = "active"
+    goal.waiting_for_json = json.dumps({})
+    goal.results_json = json.dumps({})
+    goal.retry_count = 0
+    goal.execute_at = next_run
+    goal.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+
+
+async def detect_stacked_owner_messages(session: AsyncSession, tenant_id: int,
+                                          owner_telegram_id: int,
+                                          messages: list[str]) -> list[dict]:
+    """
+    وقتی کارفرما چند پیام تلمبار فرستاده — تشخیص بده کدوم جواب برای کدومه.
+    Returns: list of {message, likely_goal_id, confidence}
+    """
+    goals = (await session.scalars(
+        select(ActiveGoal).where(
+            ActiveGoal.tenant_id == tenant_id,
+            ActiveGoal.status == "active",
+        )
+    )).all()
+
+    results = []
+    for msg in messages:
+        msg_lower = msg.lower()
+        best_match = None
+        best_score = 0
+
+        for goal in goals:
+            desc = goal.description.lower()
+            ctx = json.loads(goal.context_json or "{}")
+            # امتیاز شباهت ساده
+            score = 0
+            for word in msg_lower.split():
+                if word in desc:
+                    score += 2
+                for ctx_val in str(ctx).lower().split():
+                    if word in ctx_val:
+                        score += 1
+
+            if score > best_score:
+                best_score = score
+                best_match = goal
+
+        results.append({
+            "message": msg,
+            "likely_goal_id": best_match.id if best_match and best_score > 2 else None,
+            "goal_description": best_match.description if best_match and best_score > 2 else "عمومی",
+            "confidence": min(best_score * 10, 100),
+        })
+
+    return results
+
+
+# ═══════════════════════════════════════
+# AI Autonomy Levels
+# ═══════════════════════════════════════
+
+AI_AUTONOMY_LEVELS = {
+    "full": "همه کارها رو بدون پرسیدن انجام بده",
+    "notify": "انجام بده ولی خبر بده",
+    "confirm": "قبل از انجام تأیید بگیر",
+    "manual": "هرگز خودکار انجام نده",
+}
+
+
+async def get_ai_autonomy_level(session: AsyncSession, tenant_id: int,
+                                 action_type: str) -> str:
+    """سطح خودمختاری AI برای یه نوع اقدام."""
+    from app.database.models.business import TenantSettings
+    ts = await session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    if not ts or not ts.autonomy_rules:
+        return "confirm"
+    try:
+        rules = json.loads(ts.autonomy_rules)
+        return rules.get(action_type, {}).get("level", "confirm")
+    except Exception:
+        return "confirm"
+
+
+async def set_ai_autonomy_level(session: AsyncSession, tenant_id: int,
+                                  action_type: str, level: str) -> str:
+    """تنظیم سطح خودمختاری."""
+    from app.database.models.business import TenantSettings
+    if level not in AI_AUTONOMY_LEVELS:
+        return f"⚠️ سطح نامعتبر. انتخاب کن: {', '.join(AI_AUTONOMY_LEVELS.keys())}"
+    ts = await session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    if not ts:
+        return "⚠️ تنظیمات پیدا نشد."
+    rules = {}
+    if ts.autonomy_rules:
+        try:
+            rules = json.loads(ts.autonomy_rules)
+        except Exception:
+            pass
+    rules[action_type] = {"level": level, "description": AI_AUTONOMY_LEVELS[level]}
+    ts.autonomy_rules = json.dumps(rules, ensure_ascii=False)
+    await session.commit()
+    return f"✅ سطح دسترسی برای «{action_type}» به «{AI_AUTONOMY_LEVELS[level]}» تغییر کرد."
+
+
+# ═══════════════════════════════════════
+# Escalation by Amount
+# ═══════════════════════════════════════
+
+async def check_amount_escalation(session: AsyncSession, tenant_id: int,
+                                   amount: float, action_type: str,
+                                   owner_telegram_id: int,
+                                   bot, description: str = "") -> tuple[bool, str]:
+    """
+    اگه مبلغ از حد مجاز بیشتر بود، به کارفرما escalate کن.
+    Returns: (needs_approval, message)
+    """
+    from app.database.models.business import TenantSettings
+    ts = await session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    thresholds = {}
+    if ts and ts.autonomy_rules:
+        try:
+            rules = json.loads(ts.autonomy_rules)
+            thresholds = rules.get("amount_thresholds", {})
+        except Exception:
+            pass
+
+    threshold = thresholds.get(action_type, 0)
+    if threshold and amount > threshold:
+        msg = (
+            "مبلغ " + str(int(amount)) + " تومان بالاتر از حد مجازه. تأیید می‌کنی؟"
+        )
+        try:
+            await bot.send_message(chat_id=owner_telegram_id, text=msg)
+        except Exception:
+            pass
+        return True, "منتظر تأیید کارفرما"
+    return False, "مجاز"
+
+
+# ═══════════════════════════════════════
+# Goal Branching با نقش جدید
+# ═══════════════════════════════════════
+
+async def branch_to_new_role(session: AsyncSession, goal: "ActiveGoal",
+                               new_role: str, message: str,
+                               bot, owner_user_id: int):
+    """وارد کردن نقش جدید در مکالمه بر اساس جواب."""
+    persons = await get_persons_by_role(session, goal.tenant_id, new_role)
+    if not persons:
+        return
+    for person in persons:
+        await add_waiting(session, goal, person.telegram_id, f"branch_{new_role}")
+        try:
+            await bot.send_message(chat_id=person.telegram_id, text=message)
+        except Exception:
+            pass
+    steps = get_steps(goal)
+    steps.append({
+        "person_telegram_id": persons[0].telegram_id,
+        "person_name": persons[0].full_name,
+        "message": message,
+        "role": new_role,
+        "is_branch": True,
+    })
+    goal.steps_json = json.dumps(steps, ensure_ascii=False)
+    await session.commit()

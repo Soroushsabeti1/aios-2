@@ -265,6 +265,22 @@ async def contract_expiry_job(context):
 # هشدار اقساط سررسید
 # ═══════════════════════════════════════
 
+        # trigger flows برای contract_expiring
+        try:
+            from app.ai.dispatcher import _trigger_flows
+            tenants_ids = set()
+            async with AsyncSessionLocal() as s3:
+                from app.database.models.business import Employee
+                from sqlalchemy import select as _s3
+                emps = (await s3.scalars(_s3(Employee))).all()
+                tenants_ids = set(e.tenant_id for e in emps)
+            for tid in tenants_ids:
+                async with AsyncSessionLocal() as s4:
+                    await _trigger_flows(s4, tid, "contract_expiring", {}, 0)
+        except Exception:
+            pass
+
+
 async def installment_overdue_job(context):
     """روزانه — هشدار اقساط سررسید گذشته."""
     from app.database.base import AsyncSessionLocal
@@ -467,3 +483,11 @@ async def timed_goals_job(context):
             )
         except Exception:
             pass
+
+
+async def autonomy_reminder_job(context):
+    """ماهانه — یادآوری دسترسی‌های فعال به کارفرما."""
+    from app.database.base import AsyncSessionLocal
+    from app.modules.goal_service import send_autonomy_reminders
+    async with AsyncSessionLocal() as session:
+        await send_autonomy_reminders(context.bot, session)

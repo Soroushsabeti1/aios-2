@@ -295,14 +295,49 @@ async def receive_biz_name(update, context):
 
     # ─── ۳. اسم کسب‌وکار ───
     if step == "asking_biz":
+        # تأیید اسم کسب‌وکار
+        confirm_key = "biz_name_confirmed"
+        if not context.user_data.get(confirm_key):
+            context.user_data["pending_biz_name"] = text
+            await update.message.reply_text(
+                "«" + text + "» رو به عنوان اسم کسب‌وکارت ثبت کنم؟ اگه درسته بگو آره، وگرنه اسم جدید بنویس."
+            )
+            context.user_data["onboarding_step"] = "asking_biz_confirm"
+            return ASKING_BIZ_NAME
         context.user_data["biz_name"] = text
+        context.user_data.pop(confirm_key, None)
         await update.message.reply_text("میخوای اسم منو چی بزاری؟")
         context.user_data["onboarding_step"] = "asking_ai_name"
         return ASKING_BIZ_NAME
 
+    if step == "asking_biz_confirm":
+        text_low = text.lower().strip()
+        is_yes = any(w in text_low for w in ["آره","بله","ok","اوکی","yes","باشه","درسته"])
+        if is_yes:
+            confirmed = context.user_data.pop("pending_biz_name", text)
+            context.user_data["biz_name"] = confirmed
+            context.user_data["biz_name_confirmed"] = True
+            await update.message.reply_text("میخوای اسم منو چی بزاری؟")
+            context.user_data["onboarding_step"] = "asking_ai_name"
+        else:
+            # اسم جدید داده
+            context.user_data["pending_biz_name"] = text
+            await update.message.reply_text(
+                "«" + text + "» رو ثبت کنم؟"
+            )
+        return ASKING_BIZ_NAME
+
     # ─── ۴. اسم دستیار ───
     if step == "asking_ai_name":
+        if not context.user_data.get("ai_name_confirmed"):
+            context.user_data["pending_ai_name"] = text
+            await update.message.reply_text(
+                "«" + text + "» — این اسم رو برام انتخاب می‌کنی؟ آره یا اسم دیگه‌ای بنویس."
+            )
+            context.user_data["onboarding_step"] = "asking_ai_name_confirm"
+            return ASKING_BIZ_NAME
         context.user_data["ai_name"] = text
+        context.user_data.pop("ai_name_confirmed", None)
         mode = context.user_data.get("mode", "business")
         if mode == "business":
             await update.message.reply_text(
@@ -315,6 +350,32 @@ async def receive_biz_name(update, context):
                 "یه متن یا ویس بفرست:\n"
                 "اسم کامل، شغل، شهر، اهدافت، چه چیزی وقتت رو می‌گیره"
             )
+        context.user_data["onboarding_step"] = "asking_info"
+        return ASKING_BIZ_NAME
+
+    if step == "asking_ai_name_confirm":
+        text_low = text.lower().strip()
+        is_yes = any(w in text_low for w in ["آره","بله","ok","اوکی","yes","باشه","درسته"])
+        if is_yes:
+            confirmed = context.user_data.pop("pending_ai_name", text)
+            context.user_data["ai_name"] = confirmed
+            context.user_data["ai_name_confirmed"] = True
+            context.user_data["onboarding_step"] = "asking_ai_name"
+            # ادامه به مرحله بعد
+            context.user_data.pop("ai_name_confirmed", None)
+        else:
+            context.user_data["pending_ai_name"] = text
+            await update.message.reply_text("«" + text + "» — این اسم رو ثبت کنم؟")
+            return ASKING_BIZ_NAME
+        mode = context.user_data.get("mode", "business")
+        if mode == "business":
+            await update.message.reply_text(
+                "یه متن یا ویس بفرست و اطلاعات کسب‌وکارت رو بگو:\n"
+                "نام، نوع فعالیت، شهر، آدرس، تلفن، شماره حساب/شبا، "
+                "نام مالک، تعداد کارمندان، محصولات اصلی"
+            )
+        else:
+            await update.message.reply_text("یه متن یا ویس بفرست:\nاسم کامل، شغل، شهر، اهدافت")
         context.user_data["onboarding_step"] = "asking_info"
         return ASKING_BIZ_NAME
 
@@ -487,6 +548,7 @@ async def _process_and_reply(update, context, session, tenant_id, user,
     """منطق مشترک: پردازش پیام + ارسال جواب + فایل‌ها."""
     import re as _re
 
+
     # پیام موقت «دارم فکر می‌کنم» فقط برای کارهای سنگین
     thinking_msg = None
     if show_thinking:
@@ -623,9 +685,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # آیا کاربر منتظر وارد کردن رمز لینک دعوت است؟
+    # جلوگیری از double processing
+    uid = user.id
+    if uid in _processing_users:
+        return
+    _processing_users.add(uid)
+
     if context.user_data.get("credential_step"):
-        pass  # credential_step handler below takes care of it
+        pass
     elif await _try_invite_password(update, context):
+        _processing_users.discard(uid)
         return
 
     # آیا کاربر می‌پرسد «چی شنیدی از ویسم؟»

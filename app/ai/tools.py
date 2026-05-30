@@ -1409,3 +1409,232 @@ TOOLS += [
         }, "required": ["person_name", "task_id", "resource_type"]},
     }},
 ]
+
+# ─── Structured Flows ───
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "start_sales_funnel",
+        "description": "شروع فلوی فروش هوشمند با مشتری — از علاقه تا پرداخت",
+        "parameters": {"type": "object", "properties": {
+            "customer_name": {"type": "string"},
+            "product_name": {"type": "string"},
+        }, "required": ["customer_name", "product_name"]},
+    }},
+    {"type": "function", "function": {
+        "name": "start_support_flow",
+        "description": "شروع فلوی پشتیبانی با مشتری — عیب‌یابی تا حل مشکل",
+        "parameters": {"type": "object", "properties": {
+            "customer_name": {"type": "string"},
+            "issue": {"type": "string"},
+            "support_person_name": {"type": "string", "description": "اگه کارمند پشتیبان داره"},
+        }, "required": ["customer_name", "issue"]},
+    }},
+    {"type": "function", "function": {
+        "name": "start_approval_chain",
+        "description": "زنجیره تأیید — چند نفر باید تأیید کنن",
+        "parameters": {"type": "object", "properties": {
+            "subject": {"type": "string"},
+            "description": {"type": "string"},
+            "approver_names": {"type": "array", "items": {"type": "string"}},
+        }, "required": ["subject", "approver_names"]},
+    }},
+    {"type": "function", "function": {
+        "name": "start_employee_onboarding",
+        "description": "شروع فلوی آشنایی با کارمند جدید",
+        "parameters": {"type": "object", "properties": {
+            "employee_name": {"type": "string"},
+        }, "required": ["employee_name"]},
+    }},
+]
+
+# ─── ابزارسازی ادمین ───
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "create_custom_tool",
+        "description": "ادمین یه tool جدید تعریف می‌کنه. فقط ادمین اصلی می‌تونه استفاده کنه.",
+        "parameters": {"type": "object", "properties": {
+            "tool_name": {"type": "string"},
+            "description": {"type": "string"},
+            "parameters": {"type": "object"},
+            "handler_code": {"type": "string", "description": "کد Python که اجرا میشه"},
+        }, "required": ["tool_name", "description", "handler_code"]},
+    }},
+    {"type": "function", "function": {
+        "name": "list_custom_tools",
+        "description": "لیست tool های سفارشی ساخته‌شده توسط ادمین",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+]
+
+# ─── گرافیک پیشرفته ───
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "edit_last_image",
+        "description": "اصلاح روی همون عکس قبلی بدون نیاز به آپلود مجدد. مثال: رنگ پس‌زمینه رو عوض کن",
+        "parameters": {"type": "object", "properties": {
+            "edit_prompt": {"type": "string", "description": "چه تغییری بدی"},
+            "style": {"type": "string", "enum": ["luxury", "minimal", "bold", "warm", "cool"]},
+        }, "required": ["edit_prompt"]},
+    }},
+    {"type": "function", "function": {
+        "name": "generate_from_product",
+        "description": "ساخت پوستر از عکس محصول ثبت‌شده در دیتابیس",
+        "parameters": {"type": "object", "properties": {
+            "product_name": {"type": "string"},
+            "design_type": {"type": "string", "enum": ["poster", "story", "post", "banner"]},
+            "text_overlay": {"type": "string"},
+        }, "required": ["product_name", "design_type"]},
+    }},
+]
+
+# ─── Permission پیشرفته + Goal تکراری ───
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "grant_advanced_permission",
+        "description": (
+            "دسترسی پیشرفته — با شرایط مبلغ، زمان، نقش، category. "
+            "مثال: علی تا ۵ میلیون فاکتور صادر کنه | فقط ساعت ۸ تا ۱۸"
+        ),
+        "parameters": {"type": "object", "properties": {
+            "person_name": {"type": "string"},
+            "resource_type": {"type": "string"},
+            "action": {"type": "string", "enum": ["read", "write", "delete"]},
+            "approval_type": {"type": "string", "enum": ["always", "until_date", "count"]},
+            "max_amount": {"type": "number", "description": "حداکثر مبلغ مجاز"},
+            "time_start": {"type": "integer", "description": "ساعت شروع (مثلاً ۸)"},
+            "time_end": {"type": "integer", "description": "ساعت پایان (مثلاً ۱۸)"},
+            "allowed_categories": {"type": "array", "items": {"type": "string"}},
+            "expires_days": {"type": "integer"},
+        }, "required": ["person_name", "resource_type", "action"]},
+    }},
+    {"type": "function", "function": {
+        "name": "create_recurring_goal",
+        "description": "ساخت goal تکراری — هر X روز دوباره اجرا. مثال: هر هفته از تیم گزارش بگیر",
+        "parameters": {"type": "object", "properties": {
+            "description": {"type": "string"},
+            "role_filter": {"type": "string", "enum": ["employee", "customer", "collaborator"]},
+            "question": {"type": "string"},
+            "repeat_days": {"type": "integer", "default": 7},
+        }, "required": ["description", "role_filter", "question"]},
+    }},
+    {"type": "function", "function": {
+        "name": "detect_stacked_messages",
+        "description": "وقتی کارفرما چند پیام پشت هم فرستاده — کمک می‌کنه بفهمه کدوم جواب برای کدوم goal",
+        "parameters": {"type": "object", "properties": {
+            "context_hint": {"type": "string", "description": "خلاصه پیام‌های اخیر"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "flow_builder_guide",
+        "description": "راهنمایی ساخت فلو — با مثال‌های واقعی و گام به گام",
+        "parameters": {"type": "object", "properties": {
+            "flow_type": {"type": "string",
+                          "enum": ["no_response", "deadline", "event", "schedule", "penalty"],
+                          "description": "نوع فلوی مورد نظر"},
+        }},
+    }},
+]
+
+# ─── ابزارهای باقیمانده ───
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "web_search_tool",
+        "description": "جستجو در اینترنت. مثال: آخرین نرخ دلار، اخبار امروز",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+        }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "read_excel_file",
+        "description": "خواندن فایل اکسل آپلودشده و استخراج اطلاعات",
+        "parameters": {"type": "object", "properties": {
+            "sheet_name": {"type": "string", "description": "نام شیت (اختیاری)"},
+            "max_rows": {"type": "integer", "default": 50},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "start_contract_renewal",
+        "description": "شروع فلوی تمدید قرارداد با مشتری",
+        "parameters": {"type": "object", "properties": {
+            "customer_name": {"type": "string"},
+            "days_until_expiry": {"type": "integer"},
+        }, "required": ["customer_name"]},
+    }},
+    {"type": "function", "function": {
+        "name": "start_peer_review",
+        "description": "درخواست review کار یه کارمند توسط کارمند دیگه",
+        "parameters": {"type": "object", "properties": {
+            "reviewer_name": {"type": "string"},
+            "reviewee_name": {"type": "string"},
+            "task_description": {"type": "string"},
+        }, "required": ["reviewer_name", "reviewee_name", "task_description"]},
+    }},
+    {"type": "function", "function": {
+        "name": "list_active_permissions",
+        "description": "لیست همه دسترسی‌های فعال — مشاهده، اصلاح، لغو",
+        "parameters": {"type": "object", "properties": {
+            "person_name": {"type": "string", "description": "فیلتر بر اساس اسم (اختیاری)"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "revoke_permission_by_name",
+        "description": "لغو دسترسی یک شخص",
+        "parameters": {"type": "object", "properties": {
+            "person_name": {"type": "string"},
+            "resource_type": {"type": "string"},
+        }, "required": ["person_name"]},
+    }},
+    {"type": "function", "function": {
+        "name": "bulk_send_file",
+        "description": "ارسال یه فایل/عکس به همه اشخاص یه نقش",
+        "parameters": {"type": "object", "properties": {
+            "role_filter": {"type": "string",
+                           "enum": ["employee", "customer", "collaborator", "all"]},
+            "caption": {"type": "string"},
+        }, "required": ["role_filter"]},
+    }},
+    {"type": "function", "function": {
+        "name": "configure_notifications",
+        "description": "تنظیم کلمات کلیدی مهم برای اطلاع‌رسانی به کارفرما",
+        "parameters": {"type": "object", "properties": {
+            "add_keywords": {"type": "array", "items": {"type": "string"}},
+            "remove_keywords": {"type": "array", "items": {"type": "string"}},
+            "show_current": {"type": "boolean"},
+        }},
+    }},
+]
+
+TOOLS += [
+    {"type": "function", "function": {
+        "name": "set_ai_autonomy_level",
+        "description": "تنظیم سطح خودمختاری AI برای انواع اقدامات. مثال: برای ارسال پیام به مشتری autonomy رو full کن",
+        "parameters": {"type": "object", "properties": {
+            "action_type": {"type": "string", "description": "نوع اقدام"},
+            "level": {"type": "string", "enum": ["full", "notify", "confirm", "manual"]},
+        }, "required": ["action_type", "level"]},
+    }},
+    {"type": "function", "function": {
+        "name": "set_amount_threshold",
+        "description": "تنظیم حد مبلغ برای escalation. مثال: فاکتورهای بالای ۵ میلیون رو به من بگو",
+        "parameters": {"type": "object", "properties": {
+            "action_type": {"type": "string"},
+            "threshold_amount": {"type": "number"},
+        }, "required": ["action_type", "threshold_amount"]},
+    }},
+    {"type": "function", "function": {
+        "name": "enforce_scrum_photo",
+        "description": "الزامی کردن گزارش تصویری برای تسک‌های خاص",
+        "parameters": {"type": "object", "properties": {
+            "task_id": {"type": "string"},
+            "task_title": {"type": "string"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "send_onboarding_checklist",
+        "description": "ارسال چک‌لیست آشنایی به کارمند جدید",
+        "parameters": {"type": "object", "properties": {
+            "employee_name": {"type": "string"},
+            "custom_items": {"type": "array", "items": {"type": "string"}},
+        }, "required": ["employee_name"]},
+    }},
+]
