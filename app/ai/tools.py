@@ -522,14 +522,20 @@ TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "send_broadcast",
-        "description": "ارسال پیام گروهی به چند مشتری/کارمند. اگر سؤالیه که منتظر جواب می‌مونی، expects_reply رو true بذار. مثال: «به کارمندای فروش بگو تاریخ تولد مادرشونو بفرستن»",
+        "description": (
+            "ارسال پیام/عکس/سوال به چند نفر همزمان با هدف مشخص. "
+            "اگه عکسی آپلود شده همراه پیام ارسال میشه. "
+            "مثال: این عکس رو برای همه کارمندا بفرست و بپرس خوبه؟ "
+            "از همه بپرس فردا میان یا نه"
+        ),
         "parameters": {"type": "object", "properties": {
-            "message": {"type": "string", "description": "متن پیام"},
-            "role_filter": {"type": "string", "enum": ["customer", "employee", "collaborator", "partner"],
-                            "description": "ارسال به همه‌ی یک نقش"},
-            "person_names": {"type": "array", "items": {"type": "string"},
-                             "description": "یا ارسال به اشخاص خاص با نام"},
-            "expects_reply": {"type": "boolean", "description": "آیا منتظر جواب می‌مونی؟"},
+            "message": {"type": "string"},
+            "role_filter": {"type": "string",
+                           "enum": ["employee", "customer", "collaborator", "partner"]},
+            "person_names": {"type": "array", "items": {"type": "string"}},
+            "expects_reply": {"type": "boolean"},
+            "goal": {"type": "string", "description": "هدف نهایی مکالمه"},
+            "next_step": {"type": "string", "description": "مرحله بعد اگه موافق بودن"},
         }, "required": ["message"]},
     }},
     {"type": "function", "function": {

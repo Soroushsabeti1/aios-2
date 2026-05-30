@@ -462,29 +462,51 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
             role_filter = args.get("role_filter")
             person_names = args.get("person_names")
             expects_reply = bool(args.get("expects_reply", False))
+            goal = args.get("goal", "")  # هدف مکالمه
+            next_step = args.get("next_step", "")  # مرحله بعد
+
+            # چک عکس آپلود شده
+            upload = pending_uploads.get_upload(user_id)
+
             broadcast, targets = await communication_service.create_broadcast(
                 session, tenant_id, message,
                 role_filter=role_filter, person_names=person_names,
                 expects_reply=expects_reply,
             )
             if not broadcast:
-                return "⚠️ گیرنده‌ای پیدا نشد. مطمئن شو افرادی که می‌خوای بهشون پیام بدی، به ربات وصل شدن (لینک دعوت رو زدن)."
-            # پیام‌ها را به صف خروجی اضافه کن
+                return "⚠️ گیرنده‌ای پیدا نشد. مطمئن شو افراد به ربات وصل شدن."
+
             for t in targets:
-                prefix = ""
-                if expects_reply:
-                    suffix = "\n\n(لطفاً جوابت رو همینجا بفرست)"
+                if upload:
+                    # عکس + کپشن
+                    photo_bytes, mime = upload
+                    outbox.queue_photo(user_id, t.person_telegram_id,
+                                       photo_bytes, mime, message)
                 else:
-                    suffix = ""
-                outbox.queue_message(
-                    user_id, t.person_telegram_id, prefix + message + suffix
-                )
+                    outbox.queue_message(user_id, t.person_telegram_id, message)
                 t.delivered = True
+
+            # ذخیره goal برای پیگیری
+            if goal or next_step:
+                import json as _json
+                try:
+                    broadcast.goal_json = _json.dumps({
+                        "goal": goal,
+                        "next_step": next_step,
+                        "owner_user_id": user_id,
+                    }, ensure_ascii=False)
+                except Exception:
+                    pass
+
             await session.commit()
+
             kind = "سؤال" if expects_reply else "پیام"
-            return (f"✅ {kind} گروهی ({broadcast.display_id}) به {len(targets)} نفر فرستاده شد."
-                    + (f"\nهر وقت جواب دادن، می‌تونی بپرسی «جواب‌های {broadcast.display_id} چی شد؟»"
-                       if expects_reply else ""))
+            result = f"✅ {kind} گروهی ({broadcast.display_id}) به {len(targets)} نفر فرستاده شد."
+            if expects_reply:
+                result += f"\nوقتی جواب دادن بهت خبر میدم."
+            if goal:
+                result += f"\nهدف: {goal}"
+            return result
 
         if tool_name == "broadcast_status":
             return await communication_service.get_broadcast_status(

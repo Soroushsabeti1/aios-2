@@ -832,9 +832,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 session, tenant_id, user.id, text
             )
             if is_reply:
-                await update.message.reply_text(
-                    "✅ جوابت ثبت شد و به مدیریت رسید. ممنون!"
-                )
+                # پیام رو به AI بده تا مکالمه هدفمند رو ادامه بده
+                person = await persons_service.get_person_by_telegram(session, user.id)
+                person_name = person.full_name if person else "کاربر"
+                # نگو "ثبت شد" — فقط طبیعی پاسخ بده
+                _person_role = role if kind == "person" else None
+                await _process_and_reply(update, context, session, tenant_id, user,
+                                         text, role=role, person_role=_person_role)
                 return
 
             # پیام عادی — ذخیره‌ی گفت‌وگو
