@@ -266,6 +266,18 @@ class FileRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class Reminder(Base):
+    """یادآور."""
+    __tablename__ = "reminders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ActiveGoal(Base):
     """هدف فعال مکالمه — در دیتابیس ذخیره میشه (نه RAM)."""
     __tablename__ = "active_goals"
