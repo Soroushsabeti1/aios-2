@@ -765,7 +765,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # برای مشتری/کارمند/همکار/پارتنر:
         if kind == "person":
-            from app.modules import communication_service, persons_service
+            from app.modules import communication_service
 
             # آیا این پیام، جوابِ یک پیام گروهی (broadcast) است؟
             is_reply = await communication_service.record_broadcast_reply(
