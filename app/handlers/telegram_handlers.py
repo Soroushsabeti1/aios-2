@@ -224,11 +224,9 @@ async def receive_biz_name(update, context):
     # ─── ۱. داستان ───
     if step == "story_ask":
         text_low = text.lower().strip()
-        wants = any(w in text_low for w in [
-            "آره", "بگو", "داستان", "وقت", "بله", "ok", "اوکی", "yes", "باشه",
-            "آري", "بله", "بفرما", "بفرمايد", "بفرمائيد", "بشنوم", "بشنویم",
-            "ادامه", "جالبه", "بگو ببینم", "چرا نه", "حتما",
-        ]) or len(text_low) > 3  # اگه چیزی نوشته و نه نگفته
+        # اگه صریح نه گفت برو بعدی، وگرنه داستان بگو
+        no_words = ["نه", "نخیر", "نه ممنون", "نه لازم", "بعدا", "بی‌خیال", "skip"]
+        wants = not any(w in text_low for w in no_words)
         if wants:
             await update.message.reply_text(
                 "سال ۲۰۲۴ متیو گالاگر با یه دوستش یه کلینیک سلامت از راه دور "
@@ -322,11 +320,52 @@ async def receive_biz_name(update, context):
 
     # ─── ۵. دریافت اطلاعات ───
     if step == "asking_info":
+        # چک کن آیا کاربر الان نمیخواد وارد کنه
+        text_low = text.lower().strip()
+        not_now_words = ["بعدا", "بعداً", "بعد", "الان نه", "نمیخوام", "نه", "بعدا وارد",
+                         "فعلا نه", "فعلاً نه", "نه ممنون", "بی‌خیال", "بعدا میگم"]
+        if any(w in text_low for w in not_now_words):
+            # بدون اطلاعات هم ثبت کن
+            biz_name = context.user_data.get("biz_name", user.first_name + " کسب‌وکار")
+            async with AsyncSessionLocal() as session:
+                tenant = await create_tenant(session, user.id, biz_name)
+                from app.database.models.business import TenantSettings
+                from sqlalchemy import select as _sel
+                ts = await session.scalar(_sel(TenantSettings).where(TenantSettings.tenant_id == tenant.id))
+                if not ts:
+                    ts = TenantSettings(tenant_id=tenant.id)
+                    session.add(ts)
+                ts.user_real_name = user.first_name
+                ts.ai_name = context.user_data.get("ai_name", "دستیار")
+                ts.tone = "friendly"
+                ts.mode = context.user_data.get("mode", "business")
+                await session.commit()
+                from app.modules.subscription_service import request_trial
+                _, req_id = await request_trial(session, tenant.id, user.id)
+                if req_id:
+                    from app.ai.outbox import queue_admin_notification
+                    queue_admin_notification(user.id, req_id, "trial", tenant)
+                    import app.handlers.telegram_handlers as _self
+                    await _self._dispatch_admin_notifications(context)
+            await update.message.reply_text(
+                "باشه! اشتراکت رو فعال می‌کنم. بعد از تأیید می‌تونی اطلاعات کسب‌وکارت رو کامل کنی."
+            )
+            for k in ["onboarding_step", "ai_name", "tone", "mode", "biz_name"]:
+                context.user_data.pop(k, None)
+            return ConversationHandler.END
+
+        # اطلاعات کافی نیست - از AI بخواه تشخیص بده
+        if len(text.strip()) < 20:
+            await update.message.reply_text(
+                "کمی بیشتر توضیح بده تا بهتر بتونم کمکت کنم.\n"
+                "یا اگه الان نمیخوای بگو «بعداً وارد می‌کنم»."
+            )
+            return ASKING_BIZ_NAME
+
         biz_name = context.user_data.get("biz_name") or text[:50] or "کسب‌وکار"
 
         async with AsyncSessionLocal() as session:
             tenant = await create_tenant(session, user.id, biz_name)
-
             from app.database.models.business import TenantSettings
             from sqlalchemy import select as _sel
             ts = await session.scalar(_sel(TenantSettings).where(TenantSettings.tenant_id == tenant.id))
@@ -340,21 +379,21 @@ async def receive_biz_name(update, context):
             ts.mode = context.user_data.get("mode", "business")
             ts.business_description = text
             await session.commit()
-
             from app.modules.subscription_service import request_trial
-            msg, req_id = await request_trial(session, tenant.id, user.id)
-            await update.message.reply_text("رفتم اطلاعاتت رو ثبت کنم، وقتی آماده شد خبرت می‌کنم 🙂")
+            _, req_id = await request_trial(session, tenant.id, user.id)
+            await update.message.reply_text(
+                f"ممنون! اطلاعاتت رو دریافت کردم.\n"
+                f"رفتم ثبتشون کنم — وقتی آماده شد خبرت می‌کنم 🙂"
+            )
             if req_id:
+                from app.ai.outbox import queue_admin_notification
                 queue_admin_notification(user.id, req_id, "trial", tenant)
+                import app.handlers.telegram_handlers as _self
                 await _self._dispatch_admin_notifications(context)
 
-        # ─── ۶. لحن — آخر پرسیده می‌شه ───
-        context.user_data["onboarding_step"] = "asking_tone"
-        await update.message.reply_text(
-            "یه سوال آخر: دوست داری لحن صحبتمون چطور باشه؟\n"
-            "صمیمی و راحت یا رسمی و حرفه‌ای؟"
-        )
-        return ASKING_BIZ_NAME
+        for k in ["onboarding_step", "ai_name", "tone", "mode", "biz_name"]:
+            context.user_data.pop(k, None)
+        return ConversationHandler.END
 
     # ─── ۷. لحن ───
     if step == "asking_tone":
@@ -570,7 +609,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # آیا کاربر منتظر وارد کردن رمز لینک دعوت است؟
     if await _try_invite_password(update, context):
-        return
+        # فقط اگه credential_step فعال نیست
+        if not context.user_data.get("credential_step"):
+            return
 
     # آیا کاربر می‌پرسد «چی شنیدی از ویسم؟»
     if text and _is_asking_voice_transcript(text):

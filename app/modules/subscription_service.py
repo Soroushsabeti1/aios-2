@@ -106,9 +106,9 @@ async def approve_request(session: AsyncSession,
         tenant.subscription_status = SubscriptionStatus.TRIAL
         tenant.trial_ends_at = utcnow() + timedelta(days=settings.trial_days)
         owner_msg = (
-            f"خبر خوووووب، ثبت شد! 🎉 {settings.trial_days} روز کنارتم و بعدش اگه دوست داشتی حقوق ماهانه‌ام رو پرداخت می‌کنی و ادامه می‌دیم باهم 😉\n\n"
-            f"بریم شروع کنیم! اول اطلاعات کامل کسب‌وکارت رو وارد کن، بعد کارمنداتو اضافه کن تا لینک دعوتشون رو بفرستم. بعدش نوبت محصولات و مشتریاست.\n\n"
-            f"یا اگه میخوای راهنماییت کنم که چیکارا می‌تونیم باهم بکنیم؟"
+            f"خبر خوووووب، ثبت شد! 🎉 {settings.trial_days} روز کنارتم و بعدش اگه دوست داشتی ادامه می‌دیم باهم 😉\n\n"
+            f"یه سوال قبل از شروع — دوست داری لحن صحبتمون چطور باشه؟\n"
+            f"صمیمی و راحت، یا رسمی و حرفه‌ای؟"
         )
         admin_reply = f"✅ تست رایگان «{tenant.name}» فعال شد ({settings.trial_days} روز)."
     else:
