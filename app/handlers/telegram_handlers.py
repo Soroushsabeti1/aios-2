@@ -423,6 +423,13 @@ async def receive_biz_name_voice(update, context):
     return ConversationHandler.END
 
 
+async def cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """لغو آنبوردینگ."""
+    context.user_data.clear()
+    await update.message.reply_text("لغو شد. هر وقت خواستی /start بزن.")
+    return ConversationHandler.END
+
+
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دستور /reset — پاک کردن حافظه از دیتابیس."""
     user = update.effective_user
