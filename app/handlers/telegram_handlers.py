@@ -608,10 +608,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # آیا کاربر منتظر وارد کردن رمز لینک دعوت است؟
-    if await _try_invite_password(update, context):
-        # فقط اگه credential_step فعال نیست
-        if not context.user_data.get("credential_step"):
-            return
+    if context.user_data.get("credential_step"):
+        pass  # credential_step handler below takes care of it
+    elif await _try_invite_password(update, context):
+        return
 
     # آیا کاربر می‌پرسد «چی شنیدی از ویسم؟»
     if text and _is_asking_voice_transcript(text):
@@ -638,7 +638,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # ─── مرحله ۱: نام کاربری ───
             if cred_step == "username":
-                # چک اینکه کد ملی ۱۰ رقم باشه
                 if not text_normalized.isdigit() or len(text_normalized) != 10:
                     await update.message.reply_text(
                         "⚠️ نام کاربری باید کد ملی ۱۰ رقمی باشه.\n"
@@ -648,8 +647,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["pending_username"] = text_normalized
                 context.user_data["credential_step"] = "password"
                 await update.message.reply_text(
-                    "✅ نام کاربری تأیید شد.\n"
-                    "حالا گذرواژه‌ات رو وارد کن (شماره تماس ثبت‌شده):"
+                    "گذرواژه‌ات رو وارد کن (شماره تماس ثبت‌شده):"
                 )
                 return
 

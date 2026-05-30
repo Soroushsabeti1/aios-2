@@ -307,7 +307,7 @@ async def create_customer_invite_link(
             + (f"لیمیت: {max_uses} نفر\n" if max_uses else "نامحدود\n")
             + (f"انقضا: {expires_hours} ساعت\n" if expires_hours else "بدون انقضا\n"))
 
-    return f"{info}\n👇 این پیام رو بفرست:\n\n{msg}"
+    return f"{info}\n\n---\n{msg}"
 
 
 # ─────────────────────────────────────────────
@@ -382,7 +382,7 @@ async def create_collaborator_invite_link(
             f"نوع: {'آشنا' if acquaintance_type == 'known' else 'ناآشنا'}\n"
             + (f"برای: {person_name}\n" if person_name else ""))
 
-    return f"{info}\n👇 این پیام رو بفرست:\n\n{msg}"
+    return f"{info}\n\n---\n{msg}"
 
 
 # ─────────────────────────────────────────────

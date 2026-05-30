@@ -351,7 +351,7 @@ async def dispatch(session: AsyncSession, tenant_id: int, user_id: int,
                 parts = result.split("||SPLIT_MSG||", 1)
                 outbox.queue_message(user_id, {
                     "chat_id": user_id,
-                    "text": "👇 این پیام رو برای کارمند فوروارد کن:\n\n" + parts[1],
+                    "text": parts[1],
                 })
                 return parts[0]
             return result
