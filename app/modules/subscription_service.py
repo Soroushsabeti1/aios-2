@@ -126,6 +126,19 @@ async def approve_request(session: AsyncSession,
         admin_reply = f"✅ اشتراک «{tenant.name}» فعال شد ({active_days} روز)."
 
     await session.commit()
+
+    # پاک کردن onboarding_step از TenantSettings
+    try:
+        from app.database.models.business import TenantSettings
+        from sqlalchemy import select as _sel
+        ts = await session.scalar(_sel(TenantSettings).where(TenantSettings.tenant_id == tenant.id))
+        if ts and ts.onboarding_step:
+            ts.onboarding_step = None
+            ts.onboarding_data = None
+            await session.commit()
+    except Exception:
+        pass
+
     return True, admin_reply, tenant, owner_msg
 
 

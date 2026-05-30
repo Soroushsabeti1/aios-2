@@ -88,32 +88,63 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _handle_invite(update: Update, context: ContextTypes.DEFAULT_TYPE,
                          token: str):
-    """پردازش کلیک روی لینک دعوت."""
+    """پردازش کلیک روی لینک دعوت — کامل و بدون باگ."""
     user = update.effective_user
 
+    # پاک کردن همه state های قبلی
+    for k in ["onboarding_step", "credential_step", "pending_invite_token",
+              "pending_username", "credential_fails"]:
+        context.user_data.pop(k, None)
+
     async with AsyncSessionLocal() as session:
+        from app.database.models.business import InviteLink
+        from sqlalchemy import select as _sel
+        link = await session.scalar(_sel(InviteLink).where(InviteLink.token == token))
+
+        if not link:
+            await update.message.reply_text("⚠️ این لینک معتبر نیست.")
+            return ConversationHandler.END
+        if link.is_revoked:
+            await update.message.reply_text("⚠️ این لینک لغو شده.")
+            return ConversationHandler.END
+
+        from datetime import datetime, timezone
+        if link.expires_at:
+            exp = link.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < datetime.now(timezone.utc):
+                await update.message.reply_text("⚠️ این لینک منقضی شده. از کارفرما لینک جدید بخواه.")
+                return ConversationHandler.END
+
+        if link.max_uses and link.use_count >= link.max_uses:
+            await update.message.reply_text("⚠️ ظرفیت این لینک پر شده.")
+            return ConversationHandler.END
+
+        # اگه رمز داره → credential flow
+        if link.password:
+            context.user_data["pending_invite_token"] = token
+            context.user_data["credential_step"] = "username"
+            context.user_data["credential_fails"] = 0
+            await update.message.reply_text(
+                "🔑 برای ورود، نام کاربری‌ات رو وارد کن (کد ملی ۱۰ رقمی):"
+            )
+            return ConversationHandler.END
+
+        # بدون رمز → مستقیم وصل کن
         ok, msg = await persons_service.consume_invite_link(
             session, token, user.id,
             telegram_username=user.username,
             full_name=user.full_name,
         )
-
-        if msg == "PASSWORD_REQUIRED":
-            context.user_data["pending_invite_token"] = token
-            await update.message.reply_text(
-                "🔑 این دعوت رمز داره.\nیوزرنیمت رو بفرست (کد ملی):"
-            )
-            context.user_data["credential_step"] = "username"
-            return ConversationHandler.END
-
-        # پیام ممکنه credential change بخواد
         if ok and msg.endswith("|CHANGE_CREDENTIALS"):
             real_msg = msg[:-len("|CHANGE_CREDENTIALS")]
             await update.message.reply_text(real_msg)
             context.user_data["credential_step"] = "new_username"
-            return ConversationHandler.END
-
-        await update.message.reply_text(msg)
+        else:
+            await update.message.reply_text(msg)
+            if ok:
+                await update.message.reply_text("هر وقت کاری داشتی بگو 😊")
         return ConversationHandler.END
 
 
@@ -192,7 +223,12 @@ async def receive_biz_name(update, context):
 
     # ─── ۱. داستان ───
     if step == "story_ask":
-        wants = any(w in text for w in ["آره","بگو","داستان","وقت","بله","ok","اوکی","yes","باشه"])
+        text_low = text.lower().strip()
+        wants = any(w in text_low for w in [
+            "آره", "بگو", "داستان", "وقت", "بله", "ok", "اوکی", "yes", "باشه",
+            "آري", "بله", "بفرما", "بفرمايد", "بفرمائيد", "بشنوم", "بشنویم",
+            "ادامه", "جالبه", "بگو ببینم", "چرا نه", "حتما",
+        ]) or len(text_low) > 3  # اگه چیزی نوشته و نه نگفته
         if wants:
             await update.message.reply_text(
                 "سال ۲۰۲۴ متیو گالاگر با یه دوستش یه کلینیک سلامت از راه دور "
@@ -682,6 +718,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with AsyncSessionLocal() as session:
         kind, tenant_id, role = await _resolve_user(session, user.id)
+
+        if kind == "none":
+            # شاید تازه credential وارد کرده — یه بار دیگه refresh کن
+            await session.refresh(session.identity_map.get(('persons', user.id)) or object())
+            kind, tenant_id, role = await _resolve_user(session, user.id)
 
         if kind == "none":
             await update.message.reply_text("برای شروع، دستور /start رو بزن.")
