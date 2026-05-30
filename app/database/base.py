@@ -27,6 +27,17 @@ AsyncSessionLocal = async_sessionmaker(
 
 async def init_db():
     """ساخت جداول (در شروع یا توسعه)."""
+    import logging
+    logger = logging.getLogger("moonax.db")
+    url = settings.db_url_normalized
+    # لاگ URL بدون پسورد
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        safe = f"{p.scheme}://{p.username}:***@{p.hostname}:{p.port}{p.path}"
+        logger.info(f"Connecting to DB: {safe}")
+    except Exception:
+        pass
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
